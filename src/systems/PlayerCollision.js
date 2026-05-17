@@ -67,12 +67,17 @@ export class PlayerCollision {
     const meshes = this._getMeshes()
     const resolved = intendedMove.clone()
 
-    // 4 cardinal directions: N E S W
+    // 8 directions: 4 cardinal + 4 normalized diagonals
+    const INV_SQRT2 = 1 / Math.sqrt(2)
     const dirs = [
-      new THREE.Vector3(1, 0, 0),
-      new THREE.Vector3(-1, 0, 0),
-      new THREE.Vector3(0, 0, 1),
-      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(1,          0,  0),
+      new THREE.Vector3(-1,         0,  0),
+      new THREE.Vector3(0,          0,  1),
+      new THREE.Vector3(0,          0, -1),
+      new THREE.Vector3( INV_SQRT2, 0,  INV_SQRT2),
+      new THREE.Vector3(-INV_SQRT2, 0,  INV_SQRT2),
+      new THREE.Vector3( INV_SQRT2, 0, -INV_SQRT2),
+      new THREE.Vector3(-INV_SQRT2, 0, -INV_SQRT2),
     ]
 
     for (const dir of dirs) {
