@@ -203,6 +203,8 @@ export class EnemySystem {
         }
         // Player hides in darkness — lose them, start searching
         if (!this._losResult || this._playerLightLevel === 0) {
+          // Ensure a valid search target exists — fallback to snake's own position
+          if (!this._lastKnownLitPosition) this._lastKnownLitPosition = this._position.clone()
           this._state = 'searching'
           this._searchTimer = SEARCH_DURATION
         }
@@ -222,7 +224,7 @@ export class EnemySystem {
 
     switch (this._state) {
       case 'wandering': target = this._wanderTarget;           speed = WANDER_SPEED;  break
-      case 'hunt':      target = this._playerPosition;         speed = HUNT_SPEED;    break
+      case 'hunt':      target = this._lastKnownLitPosition ?? this._wanderTarget; speed = HUNT_SPEED; break
       case 'searching': target = this._lastKnownLitPosition;   speed = SEARCH_SPEED;  break
       case 'idle':      return  // no movement while idle
       default:          return
