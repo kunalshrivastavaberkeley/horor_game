@@ -103,10 +103,13 @@ export class AudioManager {
     }
 
     if (this._prevState === 'SETTINGS') {
-      // Resume previous audio
-      const vol = AUDIO_CONFIG.sceneVolume[stateName.toLowerCase()] ?? 0.5
-      if (this._sceneGain) {
+      // Resume audio — if a scene source exists, just fade gain back in
+      // If no source (game entered SETTINGS before any audio started), crossfade normally
+      if (this._sceneSource) {
+        const vol = AUDIO_CONFIG.sceneVolume[stateName.toLowerCase()] ?? 0.5
         this._sceneGain.gain.linearRampToValueAtTime(vol, this._ctx.currentTime + AUDIO_CONFIG.crossfadeDuration.settingsResume)
+      } else {
+        this._crossfadeTo(stateName)
       }
       return
     }
@@ -203,7 +206,11 @@ export class AudioManager {
     src.connect(gainNode)
     gainNode.connect(this._actionGain)
     src.start()
-    // Source is one-shot — GC'd after playback ends
+    // Disconnect after playback to prevent memory leak (Web Audio nodes stay in graph until disconnected)
+    src.onended = () => {
+      src.disconnect()
+      gainNode.disconnect()
+    }
   }
 
   // ─── Sanity distortion ───────────────────────────────────────────────────────
@@ -234,26 +241,24 @@ export class AudioManager {
     this._masterGain.gain.value = 1
     this._masterGain.connect(this._ctx.destination)
 
-    this._sceneGain = this._ctx.createGain()
-    this._sceneGain.gain.value = 0
-    this._sceneGain.connect(this._masterGain)
-
-    this._transitionGain = this._ctx.createGain()
-    this._transitionGain.gain.value = 0
-    this._transitionGain.connect(this._masterGain)
-
-    this._actionGain = this._ctx.createGain()
-    this._actionGain.gain.value = 1
-    this._actionGain.connect(this._masterGain)
-
-    // Distortion filter (TEMPLE only — connected to master for global effect)
+    // Distortion filter — inline between scene/transition and master
+    // Frequency starts fully open (20kHz); modulated by sanity in TEMPLE
     this._distortionFilter = this._ctx.createBiquadFilter()
     this._distortionFilter.type = AUDIO_CONFIG.sanityDistortion.filterType
     this._distortionFilter.frequency.value = AUDIO_CONFIG.sanityDistortion.filterFreqOpen
-    // Decision: distortion filter sits between scene/transition and master in TEMPLE.
-    // Implementation: it is wired in parallel (not inline) — it receives no signal normally.
-    // A cleaner approach would be inline routing, but per-spec "no features not in spec" —
-    // stub the filter as initialized but only activate frequency changes in TEMPLE.
+    this._distortionFilter.connect(this._masterGain)
+
+    this._sceneGain = this._ctx.createGain()
+    this._sceneGain.gain.value = 0
+    this._sceneGain.connect(this._distortionFilter)  // scene → filter → master
+
+    this._transitionGain = this._ctx.createGain()
+    this._transitionGain.gain.value = 0
+    this._transitionGain.connect(this._distortionFilter)  // transition → filter → master
+
+    this._actionGain = this._ctx.createGain()
+    this._actionGain.gain.value = 1
+    this._actionGain.connect(this._masterGain)  // action bypasses filter (one-shot events)
 
     await this._loadAllBuffers()
 
