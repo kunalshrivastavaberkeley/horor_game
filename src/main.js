@@ -61,8 +61,8 @@ async function main() {
   playerController.onNikoStateChange = (state) => {
     sanitySystem.onNikoStateChange(state)
     postProcessing.onNikoStateChange(state, playerController.nikoPosition)
-    if (state === 'hugging') audioManager.playNikoHug()
-    else                     audioManager.playNikoPutdown()
+    if (state === 'hugging')    audioManager.playNikoHug()
+    else if (state === 'held')  audioManager.playNikoPutdown()
   }
 
   playerController.onArtifactPickedUp = () => {
