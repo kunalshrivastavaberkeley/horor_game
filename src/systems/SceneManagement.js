@@ -50,7 +50,10 @@ export class SceneManagement {
         checkReady()
       },
       undefined,
-      (err) => { console.error('[SceneManagement] Desert load failed:', err) }
+      (err) => {
+        console.error('[SceneManagement] Desert load failed:', err)
+        this._onSceneError('desert', err)
+      }
     )
 
     loader.load(
@@ -64,7 +67,10 @@ export class SceneManagement {
         checkReady()
       },
       undefined,
-      (err) => { console.error('[SceneManagement] Temple load failed:', err) }
+      (err) => {
+        console.error('[SceneManagement] Temple load failed:', err)
+        this._onSceneError('temple', err)
+      }
     )
   }
 
@@ -118,6 +124,21 @@ export class SceneManagement {
       body.position.set(TEMPLE_POSITION.x, TEMPLE_POSITION.y, TEMPLE_POSITION.z)
       this._physicsWorld.addBody(body)
     })
+  }
+
+  _onSceneError(assetName, err) {
+    // Decision: log clearly and block transition — do not silently hang
+    console.error(`[SceneManagement] FATAL: ${assetName} asset failed to load. Game cannot start.`, err)
+    // Show user-facing error message
+    const errDiv = document.createElement('div')
+    Object.assign(errDiv.style, {
+      position: 'fixed', inset: '0', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', background: '#000', color: '#f44',
+      fontSize: '1.2rem', zIndex: '999', fontFamily: 'monospace', textAlign: 'center',
+      padding: '2rem'
+    })
+    errDiv.textContent = `Asset load failed: ${assetName}. Check console for details.`
+    document.body.appendChild(errDiv)
   }
 
   _assertReady(methodName) {
