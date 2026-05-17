@@ -156,7 +156,7 @@ export class PlayerController {
   _updateMovement(delta) {
     // Movement locked while hugging
     if (this.nikoState === 'hugging') {
-      this.movementState = 'idle'
+      this.movementState = 'hugging'
       return
     }
 
