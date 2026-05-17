@@ -9,6 +9,18 @@ const GROUND_RAY_ORIGIN_OFFSET = 0.5  // above player feet
 const GROUND_RAY_MAX = 5.0
 const MIN_FLOOR_Y = 0
 
+const INV_SQRT2 = 1 / Math.sqrt(2)
+const WALL_DIRS = [
+  new THREE.Vector3(1,          0,  0),
+  new THREE.Vector3(-1,         0,  0),
+  new THREE.Vector3(0,          0,  1),
+  new THREE.Vector3(0,          0, -1),
+  new THREE.Vector3( INV_SQRT2, 0,  INV_SQRT2),
+  new THREE.Vector3(-INV_SQRT2, 0,  INV_SQRT2),
+  new THREE.Vector3( INV_SQRT2, 0, -INV_SQRT2),
+  new THREE.Vector3(-INV_SQRT2, 0, -INV_SQRT2),
+]
+
 export class PlayerCollision {
   constructor(desertMesh, templeMesh) {
     this._desertMesh = desertMesh
@@ -68,19 +80,7 @@ export class PlayerCollision {
     const resolved = intendedMove.clone()
 
     // 8 directions: 4 cardinal + 4 normalized diagonals
-    const INV_SQRT2 = 1 / Math.sqrt(2)
-    const dirs = [
-      new THREE.Vector3(1,          0,  0),
-      new THREE.Vector3(-1,         0,  0),
-      new THREE.Vector3(0,          0,  1),
-      new THREE.Vector3(0,          0, -1),
-      new THREE.Vector3( INV_SQRT2, 0,  INV_SQRT2),
-      new THREE.Vector3(-INV_SQRT2, 0,  INV_SQRT2),
-      new THREE.Vector3( INV_SQRT2, 0, -INV_SQRT2),
-      new THREE.Vector3(-INV_SQRT2, 0, -INV_SQRT2),
-    ]
-
-    for (const dir of dirs) {
+    for (const dir of WALL_DIRS) {
       this._raycaster.set(origin, dir)
       this._raycaster.far = WALL_RAY_DISTANCE
       const hits = this._raycaster.intersectObjects(meshes, true)
