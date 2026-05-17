@@ -24,9 +24,8 @@ function darkRateFn(constants) {
   return (isDark) => isDark ? constants.shadow : constants.light
 }
 
-function proxRateFn(_constants) {
-  // Stub until EnemySystem is built — always returns 0
-  return (_factor) => 0
+function proxRateFn(constants) {
+  return (factor) => constants.maxRate * factor
 }
 
 export class SanitySystem {
