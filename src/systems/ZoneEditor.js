@@ -219,7 +219,7 @@ export class ZoneEditor {
 
     // Start drawing new rect
     this._deselect()
-    this._drawStart = new THREE.Vector2(pt.x, pt.z)
+    this._drawStart = { x: pt.x, z: pt.z }  // store explicitly as {x,z} to avoid Vector2.y/.z confusion
     this._startDrawRect(pt)
   }
 
@@ -228,10 +228,10 @@ export class ZoneEditor {
 
     if (this._drawStart && this._drawMesh) {
       const cx = (this._drawStart.x + pt.x) / 2
-      const cz = (this._drawStart.y + pt.z) / 2
+      const cz = (this._drawStart.z + pt.z) / 2
       this._drawMesh.position.set(cx, RECT_Y, cz)
       const w = Math.abs(pt.x - this._drawStart.x) || 0.01
-      const d = Math.abs(pt.z - this._drawStart.y) || 0.01
+      const d = Math.abs(pt.z - this._drawStart.z) || 0.01
       this._drawMesh.scale.set(w, 1, d)
       return
     }

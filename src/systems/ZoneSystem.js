@@ -44,7 +44,7 @@ export class ZoneSystem {
       const hd = zone.depth / 2
       if (x >= zone.x - hw && x <= zone.x + hw &&
           z >= zone.z - hd && z <= zone.z + hd) {
-        return zone.flag === 'dark'
+        return true  // found in dark_zones — it is dark regardless of flag value
       }
     }
     if (DEV_WARNING) {
