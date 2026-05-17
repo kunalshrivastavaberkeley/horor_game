@@ -4,16 +4,21 @@ import * as THREE from 'three'
  * Stateless utility. Single job: can snake see Niko light?
  */
 export class LineOfSight {
-  constructor(templeMesh) {
+  /**
+   * @param {THREE.Object3D|null} templeMesh
+   * @param {THREE.Object3D|null} desertMesh
+   */
+  constructor(templeMesh, desertMesh) {
     this._templeMesh = templeMesh
+    this._desertMesh = desertMesh
     this._raycaster = new THREE.Raycaster()
   }
 
   /**
    * @param {THREE.Vector3} snakeHeadPosition
    * @param {THREE.Vector3} nikoLightPosition - player camera world position
-   * @param {THREE.Object3D} [snakeMesh] - excluded from raycast to prevent self-hit
-   * @returns {boolean} true if snake can see Niko light
+   * @param {THREE.Object3D} [snakeMesh] - root of snake mesh, excluded from self-hit
+   * @returns {boolean} true if snake can see Niko light (no geometry between them)
    */
   check(snakeHeadPosition, nikoLightPosition, snakeMesh) {
     const dir = new THREE.Vector3()
@@ -24,14 +29,16 @@ export class LineOfSight {
     this._raycaster.set(snakeHeadPosition, dir)
     this._raycaster.far = dist
 
-    const meshes = [this._templeMesh].filter(Boolean)
+    const meshes = [this._templeMesh, this._desertMesh].filter(Boolean)
     const hits = this._raycaster.intersectObjects(meshes, true)
 
-    // Filter out snake's own geometry if provided
-    const filtered = snakeMesh
-      ? hits.filter(h => !snakeMesh.children.includes(h.object) && h.object !== snakeMesh)
-      : hits
+    if (!snakeMesh || hits.length === 0) return hits.length === 0
 
+    // Collect all snake descendants to exclude self-hits at any depth
+    const snakeObjects = new Set()
+    snakeMesh.traverse(obj => snakeObjects.add(obj))
+
+    const filtered = hits.filter(h => !snakeObjects.has(h.object))
     return filtered.length === 0
   }
 }
