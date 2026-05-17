@@ -110,7 +110,6 @@ export class PlayerController {
       this._pointerLocked = !!document.pointerLockElement
       if (!this._pointerLocked && this._gsm.isActive) {
         this.onPause?.()
-        this._gsm.onPause()
       }
     })
 

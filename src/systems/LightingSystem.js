@@ -134,10 +134,11 @@ export class LightingSystem {
   /**
    * Per-frame update. Only updates Niko light during ACTIVE state.
    * @param {number} delta - seconds
-   * @param {number} sanityFloat - 0–1 from SanitySystem
    */
-  update(delta, sanityFloat) {
+  update(delta) {
     if (!this._gsm.isActive || !this._nikoLight) return
+
+    const sanityFloat = this._gsm.systems.sanity?.getSanity() ?? 1
 
     const targetIntensity = NIKO_INTENSITY_MIN + sanityFloat * (NIKO_INTENSITY_MAX - NIKO_INTENSITY_MIN)
     const targetRadius    = NIKO_RADIUS_MIN    + sanityFloat * (NIKO_RADIUS_MAX    - NIKO_RADIUS_MIN)
