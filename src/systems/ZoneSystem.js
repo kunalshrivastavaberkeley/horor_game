@@ -2,18 +2,16 @@
 // Runtime zone evaluator — reads zones.json, answers isDark(x, z) queries.
 // No per-frame work beyond queries. Called by SanitySystem and LightingSystem.
 
-const DEV_WARNING = true  // log when position falls outside all zones
+const DEV_WARNING = false  // log when position falls outside all zones
 
 export class ZoneSystem {
   constructor() {
     this._zones = []
     this._loaded = false
-    this._sceneZone = 'desert'  // 'desert' | 'temple'
     this._prevIsDark = false
 
     // Callbacks assigned by main.js
     this.onDarknessChange = null    // (isDark: boolean) => void
-    this.onSceneZoneChange = null   // (zone: 'desert'|'temple') => void
   }
 
   async load() {
@@ -70,35 +68,17 @@ export class ZoneSystem {
   }
 
   /**
-   * Current scene zone name.
-   * @returns {'desert'|'temple'}
-   */
-  get sceneZone() {
-    return this._sceneZone
-  }
-
-  /**
-   * Called each frame by GSM/main.js with current player position.
-   * Emits darkness and scene-zone change events.
+   * Called each frame by main.js with current player position.
+   * Emits darkness change events.
    * @param {THREE.Vector3} playerPosition
    */
   update(playerPosition) {
     if (!this._loaded || !playerPosition) return
 
-    // Darkness check — emit only on change
     const dark = this.isDark(playerPosition.x, playerPosition.z)
     if (dark !== this._prevIsDark) {
       this._prevIsDark = dark
       this.onDarknessChange?.(dark)
-    }
-
-    // Scene zone — temple boundary at X=40 (temple stub placed at X=50)
-    // Decision: simple X threshold; ZoneSystem does not own zone geometry
-    const zone = playerPosition.x > 40 ? 'temple' : 'desert'
-    if (zone !== this._sceneZone) {
-      this._sceneZone = zone
-      this.onSceneZoneChange?.(zone)
-      console.log(`[ZoneSystem] sceneZone → ${zone}`)
     }
   }
 }

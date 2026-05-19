@@ -15,9 +15,8 @@ const DIRECTIONS = [
 ]
 
 export class SnakeCollision {
-  constructor(templeMesh, desertMesh) {
-    this._templeMesh = templeMesh
-    this._desertMesh = desertMesh
+  constructor(catacombMesh) {
+    this._catacombMesh = catacombMesh
     this._raycaster = new THREE.Raycaster()
 
     /** @type {THREE.Vector3} The normal of the surface the snake is currently on */
@@ -39,7 +38,7 @@ export class SnakeCollision {
    * @param {THREE.Vector3} snakeForward - normalized forward direction
    */
   update(snakePosition, snakeForward) {
-    const meshes = [this._templeMesh, this._desertMesh].filter(Boolean)
+    const meshes = [this._catacombMesh].filter(Boolean)
     this.nearestSurfaces = []
 
     for (const dir of DIRECTIONS) {

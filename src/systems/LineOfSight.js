@@ -5,12 +5,10 @@ import * as THREE from 'three'
  */
 export class LineOfSight {
   /**
-   * @param {THREE.Object3D|null} templeMesh
-   * @param {THREE.Object3D|null} desertMesh
+   * @param {THREE.Object3D|null} catacombMesh
    */
-  constructor(templeMesh, desertMesh) {
-    this._templeMesh = templeMesh
-    this._desertMesh = desertMesh
+  constructor(catacombMesh) {
+    this._catacombMesh = catacombMesh
     this._raycaster = new THREE.Raycaster()
   }
 
@@ -29,7 +27,7 @@ export class LineOfSight {
     this._raycaster.set(snakeHeadPosition, dir)
     this._raycaster.far = dist
 
-    const meshes = [this._templeMesh, this._desertMesh].filter(Boolean)
+    const meshes = [this._catacombMesh].filter(Boolean)
     const hits = this._raycaster.intersectObjects(meshes, true)
 
     if (!snakeMesh || hits.length === 0) return hits.length === 0

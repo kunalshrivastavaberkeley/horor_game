@@ -1,43 +1,43 @@
 import * as THREE from 'three'
-import { StartState } from './flow/StartState.js'
-import { IntroState } from './flow/IntroState.js'
-import { DesertState } from './flow/DesertState.js'
-import { TempleState } from './flow/TempleState.js'
-import { ExitState } from './flow/ExitState.js'
-import { EndState } from './flow/EndState.js'
+import { StartState }    from './flow/StartState.js'
+import { IntroState }    from './flow/IntroState.js'
+import { DesertState }   from './flow/DesertState.js'
+import { TempleState }   from './flow/TempleState.js'
+import { ExitState }     from './flow/ExitState.js'
+import { EndState }      from './flow/EndState.js'
 import { SettingsState } from './utilities/SettingsState.js'
 
 const STATES = {
-  START: StartState,
-  INTRO: IntroState,
-  DESERT: DesertState,
-  TEMPLE: TempleState,
-  EXIT: ExitState,
-  END: EndState,
+  START:    StartState,
+  INTRO:    IntroState,
+  DESERT:   DesertState,
+  TEMPLE:   TempleState,
+  EXIT:     ExitState,
+  END:      EndState,
   SETTINGS: SettingsState,
 }
 
 export class GameStateMachine {
   constructor() {
-    // Renderer — init once at boot
     this.renderer = new THREE.WebGLRenderer({ antialias: true })
     this.renderer.setPixelRatio(window.devicePixelRatio)
     this.renderer.setSize(window.innerWidth, window.innerHeight)
     document.getElementById('app').appendChild(this.renderer.domElement)
 
-    this.scene = new THREE.Scene()
+    this.scene  = new THREE.Scene()
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
-    this.scene.add(this.camera) // camera in scene so child lights work
+    this.scene.add(this.camera)
 
     this.currentStateName = null
-    this.currentState = null
-    this.isActive = false // true during DESERT/TEMPLE/EXIT gameplay
+    this.currentState     = null
+    this.isActive         = false
 
-    // Systems registry — set by main.js after construction
     this.systems = {}
 
-    this._clock = new THREE.Clock()
-    this._postProcessing = null // set by main.js for render override
+    this._clock         = new THREE.Clock()
+    this._postProcessing = null
+    this._modeManager   = null    // set by main.js
+    this._minimapCam    = null    // set by main.js
 
     window.addEventListener('resize', () => {
       this.camera.aspect = window.innerWidth / window.innerHeight
@@ -47,13 +47,11 @@ export class GameStateMachine {
     })
   }
 
-  registerSystem(name, system) {
-    this.systems[name] = system
-  }
+  registerSystem(name, system) { this.systems[name] = system }
 
-  setPostProcessing(pp) {
-    this._postProcessing = pp
-  }
+  setPostProcessing(pp)    { this._postProcessing = pp }
+  setModeManager(mm)       { this._modeManager = mm }
+  setMinimap(cam)          { this._minimapCam = cam }
 
   start() {
     this.transition('START')
@@ -64,54 +62,66 @@ export class GameStateMachine {
     if (!STATES[stateName]) { console.error(`[GSM] Unknown state: ${stateName}`); return }
     if (this.currentState?.exit) this.currentState.exit(this)
     this.currentStateName = stateName
-    this.currentState = new STATES[stateName]()
+    this.currentState     = new STATES[stateName]()
     this.currentState.enter(this)
     console.log(`[GSM] → ${stateName}`)
   }
 
-  setGameActive(val) {
-    this.isActive = val
-  }
+  setGameActive(val) { this.isActive = val }
 
-  // Called by SanitySystem
-  onSanityDepleted() {
-    if (this.currentStateName !== 'END') this.transition('END')
-  }
-
-  // Called by TriggerSystem (exit zone)
-  onExitReached() {
-    if (this.currentStateName !== 'END') this.transition('END')
-  }
-
-  // Called by EnemySystem (player caught)
-  onPlayerCaught() {
-    if (this.currentStateName !== 'END') this.transition('END')
-  }
-
-  // Called by PlayerController (pointer lock lost)
-  onPause() {
-    // Conservative decision: log only — full pause screen out of scope per spec
-    console.log('[GSM] Pause requested (pointer lock lost)')
-  }
+  onSanityDepleted() { if (this.currentStateName !== 'END') this.transition('END') }
+  onExitReached()    { if (this.currentStateName !== 'END') this.transition('END') }
+  onPlayerCaught()   { if (this.currentStateName !== 'END') this.transition('END') }
+  onPause()          { console.log('[GSM] Pause requested (pointer lock lost)') }
 
   _loop() {
     requestAnimationFrame(() => this._loop())
     const delta = this._clock.getDelta()
 
-    // Tick current state
     this.currentState?.update?.(this, delta)
+    for (const sys of Object.values(this.systems)) sys.update?.(delta)
 
-    // Tick all registered systems
-    for (const sys of Object.values(this.systems)) {
-      sys.update?.(delta)
+    // Active camera from ModeManager, fallback to game camera
+    const activeCam = this._modeManager?.activeCamera ?? this.camera
+
+    // Minimap sub-viewport — render top-down when in fly or devWalk mode
+    const activeKey = this._modeManager?.activeKey
+    if ((activeKey === 'fly' || activeKey === 'devWalk') && this._minimapCam) {
+      // Main view
+      this.renderer.setViewport(0, 0, window.innerWidth, window.innerHeight)
+      this.renderer.render(this.scene, activeCam)
+
+      // Minimap
+      const MARGIN = 10, HEIGHT = 180
+      const aspect  = (this._minimapCam.right - this._minimapCam.left)
+                    / (this._minimapCam.top   - this._minimapCam.bottom)
+      const WIDTH   = Math.round(HEIGHT * aspect)
+      const vpX     = MARGIN
+      const vpY     = window.innerHeight - HEIGHT - MARGIN
+      this.renderer.autoClear = false
+      this.renderer.setScissorTest(true)
+      this.renderer.setScissor(vpX, vpY, WIDTH, HEIGHT)
+      this.renderer.setViewport(vpX, vpY, WIDTH, HEIGHT)
+      this.renderer.clear()
+      this.renderer.render(this.scene, this._minimapCam)
+      this.renderer.setScissorTest(false)
+      this.renderer.autoClear = true
+      this.renderer.setViewport(0, 0, window.innerWidth, window.innerHeight)
+      return
     }
 
-    // PostProcessing render or fallback
+    // Zone-edit mode renders through its own ortho camera (already in activeCam)
+    if (this._modeManager?.activeKey === 'zoneEdit') {
+      this.renderer.render(this.scene, activeCam)
+      return
+    }
+
+    // PostProcessing or plain render
     if (this._postProcessing && this.isActive) {
       this._postProcessing.update(delta, this.systems.sanity?.getSanity?.() ?? 1)
       this._postProcessing.render()
     } else {
-      this.renderer.render(this.scene, this.camera)
+      this.renderer.render(this.scene, activeCam)
     }
   }
 }
