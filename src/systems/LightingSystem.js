@@ -5,12 +5,11 @@
 import * as THREE from 'three'
 
 // Tunable constants — all light parameters live here, never inline
-const NIKO_INTENSITY_MAX      = 2.5
-const NIKO_INTENSITY_MIN      = 0.5
-const NIKO_RADIUS_MAX         = 8.0
-const NIKO_RADIUS_MIN         = 2.0
+// nikoLight is now just a constant dim fill for the lantern body — the real
+// scene illumination comes from per-particle PointLights in DustParticleSystem.
+const NIKO_INTENSITY          = 0.3   // constant — low fill only
+const NIKO_RADIUS             = 2.0   // tight — just enough to see the orb itself
 const NIKO_EMISSIVE_MAX       = 0.5
-const NIKO_LERP_RATE          = 3.0
 const AMBIENT_CATACOMB        = 0.05
 const TORCH_INTENSITY         = 3.0
 const TORCH_COLOR             = 0xff8800
@@ -91,8 +90,9 @@ export class LightingSystem {
     this._ambientLight = new THREE.AmbientLight(0xffffff, AMBIENT_CATACOMB)
     this._scene.add(this._ambientLight)
 
-    // Niko's point light — added to scene; position tracked from nikoMesh each frame
-    this._nikoLight = new THREE.PointLight(0xffeedd, NIKO_INTENSITY_MAX, NIKO_RADIUS_MAX)
+    // Niko's point light — constant dim fill for the lantern body.
+    // Real scene illumination is handled by per-particle lights in DustParticleSystem.
+    this._nikoLight = new THREE.PointLight(0xffeedd, NIKO_INTENSITY, NIKO_RADIUS)
     this._scene.add(this._nikoLight)
 
     this._nikoLightHelper = new THREE.PointLightHelper(this._nikoLight, 0.15)
@@ -170,6 +170,8 @@ export class LightingSystem {
     }
   }
 
+  getNikoLight() { return this._nikoLight }
+
   setCamera(cam) { this._camera = cam }
 
   releaseCamera() { this._camera = null }
@@ -178,26 +180,15 @@ export class LightingSystem {
    * Per-frame update. Only updates Niko light during ACTIVE state.
    * @param {number} delta - seconds
    */
-  update(delta) {
+  update(_delta) {
     if (!this._gsm.isActive || !this._nikoLight) return
 
+    // Track the lantern position — constant fill, no sanity-driven lerp.
+    // Particle lights in DustParticleSystem handle the actual illumination.
     const lightSource = this._bulbMesh ?? this._nikoMesh
     if (lightSource) {
       lightSource.getWorldPosition(this._nikoLight.position)
       this._nikoLightHelper.update()
     }
-
-    const sanityFloat = this._gsm.systems.sanity?.getSanity() ?? 1
-    const hugging     = this._gsm.systems.player?.nikoState === 'hugging'
-
-    const targetIntensity = (NIKO_INTENSITY_MIN + sanityFloat * (NIKO_INTENSITY_MAX - NIKO_INTENSITY_MIN)) * (hugging ? 0.05 : 1.0)
-    const targetRadius    = (NIKO_RADIUS_MIN    + sanityFloat * (NIKO_RADIUS_MAX    - NIKO_RADIUS_MIN))    * (hugging ? 0.2  : 1.0)
-
-    this._nikoLight.intensity += (targetIntensity - this._nikoLight.intensity) * NIKO_LERP_RATE * delta
-    this._nikoLight.distance  += (targetRadius    - this._nikoLight.distance)  * NIKO_LERP_RATE * delta
-
-    this._nikoLight.intensity = Math.max(this._nikoLight.intensity, NIKO_INTENSITY_MIN)
-    this._nikoLight.distance  = Math.max(this._nikoLight.distance,  NIKO_RADIUS_MIN)
-
   }
 }

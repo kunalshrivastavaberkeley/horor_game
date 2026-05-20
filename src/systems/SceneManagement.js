@@ -62,6 +62,78 @@ export class SceneManagement {
     this._onSceneReady()
   }
 
+  setCatacombStoneAppearance(emissiveColor = 0x000000, emissiveIntensity = 0) {
+    this._assertReady('setCatacombStoneAppearance')
+    this._catacombMesh.traverse(child => {
+      if (!child.isMesh) return
+      const mats = Array.isArray(child.material) ? child.material : [child.material]
+      for (let i = 0; i < mats.length; i++) {
+        const old = mats[i]
+        const stone = new THREE.MeshStandardMaterial({
+          map:              old.map              ?? null,
+          normalMap:        old.normalMap        ?? null,
+          aoMap:            old.aoMap            ?? null,
+          roughnessMap:     old.roughnessMap     ?? null,
+          metalnessMap:     old.metalnessMap     ?? null,
+          color:            old.color            ?? new THREE.Color(0x8a7060),
+          roughness:        0.92,
+          metalness:        0.0,
+          side:             old.side             ?? THREE.FrontSide,
+          transparent:      old.transparent      ?? false,
+          opacity:          old.opacity          ?? 1.0,
+          alphaTest:        old.alphaTest        ?? 0,
+          name:             old.name             ?? '',
+          emissive:         new THREE.Color(emissiveColor),
+          emissiveIntensity,
+        })
+        if (Array.isArray(child.material)) child.material[i] = stone
+        else child.material = stone
+        old.dispose()
+      }
+    })
+  }
+
+  /**
+   * Pass 2 — overlay each catacomb mesh with a SubtractiveBlending ghost.
+   * The warm emissive color gets subtracted from the rendered frame wherever the
+   * stone sits, making walls drain warmth out of the scene. Niko's additive point
+   * light still wins in open space — the effect reads as the stone "eating" light.
+   * @param {number|THREE.Color} color      warm color to subtract, e.g. 0xff5500
+   * @param {number}             intensity  strength of the drain
+   */
+  addCatacombSubtractiveOverlay(color = 0xff5500, intensity = 0.35) {
+    this._assertReady('addCatacombSubtractiveOverlay')
+
+    // Shared material — same for all overlay meshes, no per-mesh state needed
+    const overlayMat = new THREE.MeshStandardMaterial({
+      color:             0x000000,
+      emissive:          new THREE.Color(color),
+      emissiveIntensity: intensity,
+      blending:          THREE.SubtractiveBlending,
+      depthWrite:        false,
+      depthTest:         true,
+      transparent:       true,
+      fog:               true,
+    })
+
+    // Collect meshes first so traverse doesn't see the new overlays
+    const meshes = []
+    this._catacombMesh.traverse(child => { if (child.isMesh) meshes.push(child) })
+
+    const overlays = []
+    for (const child of meshes) {
+      const overlay = new THREE.Mesh(child.geometry, overlayMat)
+      overlay.renderOrder = 1
+      // Bake world transform so overlays sit exactly on top of the stone
+      child.updateWorldMatrix(true, false)
+      overlay.applyMatrix4(child.matrixWorld)
+      overlay.matrixAutoUpdate = false
+      this._scene.add(overlay)
+      overlays.push(overlay)
+    }
+    this._catacombOverlays = overlays
+  }
+
   _onSceneError(assetName, err) {
     console.error(`[SceneManagement] FATAL: ${assetName} asset failed to load. Game cannot start.`, err)
     const errDiv = document.createElement('div')

@@ -6,7 +6,7 @@ export class IntroState {
   enter(gsm) {
     // Stub: auto-advance after 500ms so game is playable immediately
     // Decision: no assets yet, so skip straight to DESERT
-    this._timer = setTimeout(() => gsm.transition('DESERT'), 500)
+    this._timer = setTimeout(() => gsm.transition('DESERT'), 0)
   }
 
   update(_gsm, _delta) {}

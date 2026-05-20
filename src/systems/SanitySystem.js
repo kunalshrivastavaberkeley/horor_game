@@ -75,19 +75,32 @@ export class SanitySystem {
     return this._sanity
   }
 
+  /**
+   * Override sanity with the light ratio from DustParticleSystem.
+   * When set, rate-based calculation is bypassed — light IS sanity.
+   * @param {number} ratio 0–1
+   */
+  setLightRatio(ratio) {
+    this._lightRatio = ratio
+  }
+
   // --- Per-frame update ---
 
   /** @param {number} delta seconds */
   update(delta) {
-    if (!this._gsm.isActive) return  // no-op outside ACTIVE state
-    if (this._depleted) return        // one-shot guard — stops after firing
+    if (!this._gsm.isActive) return
+    if (this._depleted) return
 
-    const rateDelta =
-      this._nikoRate(this._nikoState) +
-      this._darkRate(this._isDark) +
-      this._proxRate(this._enemyProximityFactor)
-
-    this._sanity = Math.max(0, Math.min(1, this._sanity + rateDelta * delta))
+    if (this._lightRatio !== undefined) {
+      // Light drives sanity directly — no rate calculation
+      this._sanity = this._lightRatio
+    } else {
+      const rateDelta =
+        this._nikoRate(this._nikoState) +
+        this._darkRate(this._isDark) +
+        this._proxRate(this._enemyProximityFactor)
+      this._sanity = Math.max(0, Math.min(1, this._sanity + rateDelta * delta))
+    }
 
     if (this._sanity <= 0) {
       this._depletionTimer += delta * 1000  // seconds → ms

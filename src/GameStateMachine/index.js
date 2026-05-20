@@ -116,9 +116,10 @@ export class GameStateMachine {
       return
     }
 
-    // PostProcessing or plain render
-    if (this._postProcessing && this.isActive) {
-      this._postProcessing.update(delta, this.systems.sanity?.getSanity?.() ?? 1)
+    // Player view — route through EffectComposer so bloom applies.
+    // Sync the render pass camera in case ModeManager switched it this frame.
+    if (this._postProcessing) {
+      this._postProcessing._renderPass.camera = activeCam
       this._postProcessing.render()
     } else {
       this.renderer.render(this.scene, activeCam)

@@ -18,6 +18,8 @@ import { LightingSystem }   from './systems/LightingSystem.js'
 import { EnemySystem }      from './systems/EnemySystem.js'
 import { TriggerSystem }    from './systems/TriggerSystem.js'
 import { PostProcessing }   from './systems/PostProcessing.js'
+import { FogSystem }        from './systems/FogSystem.js'
+import { DustParticleSystem } from './systems/DustParticleSystem.js'
 import { TagSystem }        from './systems/TagSystem.js'
 import { SpatialSystem }    from './systems/SpatialSystem.js'
 import { NIKO }             from './nikoConfig.js'
@@ -48,6 +50,14 @@ async function main() {
 
   await Promise.all([zoneSystem.load(), sceneReady])
 
+  sceneManagement.setCatacombStoneAppearance(0x000000, 0)
+
+  // Pass 3 — fog: height-based pooling at floor + animated FBM noise drift.
+  // Must run after setCatacombStoneAppearance so it patches the finalized materials.
+  const fogSystem = new FogSystem(gsm.scene, gsm)
+  fogSystem.applyFogToMesh(sceneManagement.getCatacombMesh())
+  gsm.registerSystem('fog', fogSystem)
+
   // ─── Player entity ───────────────────────────────────────────────────────────
   const playerController = new PlayerController(sceneManagement, gsm)
   gsm.registerSystem('player', playerController)
@@ -66,6 +76,9 @@ async function main() {
   nikoLoader.load(
     '/models/niko.glb',
     (gltf) => {
+      gltf.scene.traverse(o => {
+        if (o.isMesh) o.renderOrder = 2
+      })
       gsm.scene.add(gltf.scene)
       playerController.setNikoMesh(gltf.scene)
       lightingSystem.setNikoMesh(gltf.scene)
@@ -77,23 +90,33 @@ async function main() {
   )
 
   // ─── Hand billboard — fingers BEHIND Niko, thumb IN FRONT ───────────────────
-  // render order sandwich: fingers (0) → Niko meshes (1) → thumb (2)
+  // Render order sandwich: sentinel clears depth (1) → Niko (2) → fingers (3) → thumb (4)
+  // The sentinel fires renderer.clearDepth() so Niko always draws in front of walls
+  // but still self-occludes correctly (depthTest stays ON for Niko's own meshes).
+  const _sentinel = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.001, 0.001),
+    new THREE.MeshBasicMaterial({ colorWrite: false, depthTest: false, depthWrite: false })
+  )
+  _sentinel.renderOrder = 1
+  _sentinel.frustumCulled = false
+  _sentinel.onBeforeRender = (renderer) => renderer.clearDepth()
+  gsm.scene.add(_sentinel)
+
   const texLoader = new THREE.TextureLoader()
 
-  // fingers: depthTest ON — Niko writes depth first (opaque pass), so fingers
-  // fails depth test wherever Niko covers it → fingers stays behind Niko.
+  // fingers: renderOrder 3 — drawn after Niko (2) with depthTest ON → Niko's depth occludes it → behind Niko.
   const fingersSprite = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texLoader.load('/fingers.png'), transparent: true, depthTest: true, depthWrite: false })
   )
-  fingersSprite.renderOrder = 0
+  fingersSprite.renderOrder = 3
   fingersSprite.visible = false
   gsm.scene.add(fingersSprite)
 
-  // thumb: depthTest OFF, higher renderOrder — draws after everything, always on top.
+  // thumb: renderOrder 4 — drawn last, depthTest OFF → always in front of everything.
   const thumbSprite = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: texLoader.load('/thumb_1.png'), transparent: true, depthTest: false, depthWrite: false })
   )
-  thumbSprite.renderOrder = 1
+  thumbSprite.renderOrder = 4
   thumbSprite.visible = false
   gsm.scene.add(thumbSprite)
 
@@ -122,6 +145,11 @@ async function main() {
   lightingSystem.init(zoneSystem.zones)
   gsm.registerSystem('lighting', lightingSystem)
 
+  const dustSystem = new DustParticleSystem(gsm.scene, gsm)
+  dustSystem.setNikoLight(lightingSystem.getNikoLight())
+  dustSystem.setCatacombMesh(sceneManagement.getCatacombMesh())
+  gsm.registerSystem('dust', dustSystem)
+
   const enemySystem = new EnemySystem(gsm.scene)
   enemySystem.init()
   gsm.registerSystem('enemy', enemySystem)
@@ -131,6 +159,7 @@ async function main() {
 
   const postProcessing = new PostProcessing(gsm.renderer, gsm.scene, gsm.camera, gsm)
   gsm.setPostProcessing(postProcessing)
+  gsm.registerSystem('postProcessing', postProcessing)
 
   // ─── Dev tools ───────────────────────────────────────────────────────────────
   const zoneEditor = new ZoneEditor(gsm.scene)
@@ -152,7 +181,7 @@ async function main() {
 
   const playerWalkMode = new PlayerWalkMode(gsm.camera, playerController, gsm.renderer, gsm, modeManager, tagSystem)
   const devWalkMode    = new DevWalkMode(gsm.camera, playerController, gsm.renderer, gsm, modeManager, zoneEditor, lightingSystem, tagSystem, sceneManagement, spatialSystem)
-  const flyMode        = new FlyMode(gsm.renderer, playerController, lightingSystem, modeManager)
+  const flyMode        = new FlyMode(gsm.renderer, playerController, lightingSystem, modeManager, gsm.scene)
   const zoneEditMode   = new ZoneEditMode(gsm.renderer, gsm.scene, zoneEditor, lightingSystem, tagSystem)
   const orbitMode      = new OrbitMode(mapEditor)
 
@@ -208,8 +237,6 @@ async function main() {
   const coordinator = {
     update(delta) {
       mapEditor.update()
-      _testLightT += delta
-      if (negSphere) negSphere.position.x = -53.0 + Math.sin(_testLightT * 1.2) * 3
       if (!gsm.isActive) return
 
       const pos   = playerController.playerPosition
@@ -222,6 +249,8 @@ async function main() {
       flyMarker.visible = inFly
 
       playerController.setBodyVisible(inFly)
+
+      sanitySystem.setLightRatio(dustSystem.getLightRatio())
 
       zoneSystem.update(pos)
       triggerSystem.update(pos)
@@ -264,6 +293,7 @@ async function main() {
       negSphere.rotation.y = -Math.PI / 2
       negSphere.scale.setScalar(0.3)
       gsm.scene.add(negSphere)
+      dustSystem.setMonster(negSphere)
     },
     undefined,
     (err) => console.error('[main] Skull load failed:', err)
@@ -272,7 +302,6 @@ async function main() {
   const testLight = new THREE.PointLight(0xffffff, 8, 6)
   testLight.position.set(-53.0, 4, -30)
   gsm.scene.add(testLight)
-  let _testLightT = 0
 
   gsm.camera.position.copy(playerController.playerPosition)
 

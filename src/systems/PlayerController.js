@@ -10,7 +10,7 @@ const MOVE_SPEED           = 5.0
 const MIN_MOVE_SPEED       = 1.5
 const FLOOR_SEEK           = 3.0
 const ARTIFACT_PICKUP_DIST = 2.5
-const DEATH_Y              = -20
+export const DEATH_Y       = -1
 const SPAWN_POS            = new THREE.Vector3(-53.0, 5, -28.9)
 
 const BODY_RADIUS        = 0.4
@@ -18,6 +18,20 @@ const BODY_HEIGHT        = 1.8
 const CROUCH_MIN         = 0.75
 const CROUCH_SPEED       = 5.0
 const CROUCH_SPEED_BOOST = 4.0
+
+const FALL_RISE           = 12.0  // intensity units/s while ungrounded
+const FALL_DECAY          = 8.0   // intensity units/s while grounded
+const CHECKPOINT_INTERVAL    = 3.0   // seconds between checkpoint saves
+const CHECKPOINT_BUFFER_SIZE = 4     // rolling history depth — each death steps one further back
+
+const BAIL_DURATION       = 0.45  // real seconds of slow-mo on death
+const BAIL_TIMESCALE      = 0.12  // time scale factor during bail
+
+const NIKO_FLOAT_MAX      = 0.6     // max upward niko offset while airborne
+const NIKO_FWD_MAX        = 0.2   // max forward (away from camera) offset while airborne
+const NIKO_SPRING_K       = 2     // spring stiffness for landing oscillation
+const NIKO_SPRING_DAMPING = 2     // damping coefficient
+const NIKO_IMPACT_KICK    = 10.0  // downward velocity on landing
 
 const _Y_UP = new THREE.Vector3(0, 1, 0)
 
@@ -65,6 +79,17 @@ export class PlayerController {
     this._currentBodyHeight  = BODY_HEIGHT
     this._horizontalSpeed    = 0
     this._cameraFrozen       = false
+
+    this._fallIntensity      = 0
+    this._isGrounded         = true
+    this._prevGrounded       = true
+    this._nikoVertOffset     = 0
+    this._nikoVertVel        = 0
+    this._nikoFwdOffset      = 0
+    this._nikoFwdVel         = 0
+    this._checkpointHistory  = [SPAWN_POS.clone()]  // oldest first; spawn is permanent floor
+    this._checkpointTimer    = 0
+    this._bailTimer          = 0
 
     this._bobPhase    = 0
     this._smoothSpeed = 0              // amplitude envelope — ramps up/down to kill snap on start/stop
@@ -139,6 +164,9 @@ export class PlayerController {
 
   freezeCamera(val) { this._cameraFrozen = val }
   get isCameraFrozen() { return this._cameraFrozen }
+  get fallIntensity()  { return this._fallIntensity }
+  get timeScale()      { return this._bailTimer > 0 ? BAIL_TIMESCALE : 1.0 }
+  get isGrounded()     { return this._isGrounded }
 
   setBodyVisible(val) { this._showBodies = val }
 
@@ -149,6 +177,21 @@ export class PlayerController {
   }
 
   move(direction, delta) {
+    if (this._bailTimer > 0) {
+      this._bailTimer -= delta
+      if (this._bailTimer <= 0) {
+        this._bailTimer = 0
+        // Pop the most recent checkpoint so a quick repeat death steps further back.
+        // Always keep at least one entry (the original spawn fallback).
+        if (this._checkpointHistory.length > 1) this._checkpointHistory.pop()
+        this.playerPosition.copy(this._checkpointHistory[this._checkpointHistory.length - 1])
+        this._currentBodyHeight = BODY_HEIGHT
+        this._fallIntensity     = 0
+        this._checkpointTimer   = 0
+      }
+      return
+    }
+
     const feetY = this.playerPosition.y - this._currentBodyHeight
     if (this._collision) {
       const available  = this._collision.findCeiling(this.playerPosition.x, feetY, this.playerPosition.z)
@@ -179,18 +222,36 @@ export class PlayerController {
     const intendedMove = direction.clone().multiplyScalar(speed * delta)
     intendedMove.y = -FLOOR_SEEK * delta
 
+    let isGrounded = false
     if (this._collision) {
-      const { resolvedMove } = this._collision.resolve(
+      const { resolvedMove, isGrounded: g } = this._collision.resolve(
         this.playerPosition, intendedMove, this._currentBodyHeight
       )
       this.playerPosition.add(resolvedMove)
+      isGrounded = g
     } else {
       this.playerPosition.add(intendedMove)
+      isGrounded = true
+    }
+
+    this._isGrounded    = isGrounded
+    this._fallIntensity = isGrounded
+      ? Math.max(0, this._fallIntensity - FALL_DECAY * delta)
+      : Math.min(1, this._fallIntensity + FALL_RISE * delta)
+
+    if (isGrounded && this._fallIntensity === 0) {
+      this._checkpointTimer += delta
+      if (this._checkpointTimer >= CHECKPOINT_INTERVAL) {
+        this._checkpointHistory.push(this.playerPosition.clone())
+        if (this._checkpointHistory.length > CHECKPOINT_BUFFER_SIZE) this._checkpointHistory.shift()
+        this._checkpointTimer = 0
+      }
+    } else {
+      this._checkpointTimer = 0
     }
 
     if (this.playerPosition.y < DEATH_Y) {
-      this.playerPosition.copy(SPAWN_POS)
-      this._currentBodyHeight = BODY_HEIGHT
+      this._bailTimer = BAIL_DURATION
     }
   }
 
@@ -286,7 +347,30 @@ export class PlayerController {
       .addScaledVector(fwd,   oscFwdV)
 
     this._nikoOscOffset.lerp(targetOsc, Math.min(1, 14 * delta))
+    // fall float + landing spring applied to Niko's world position
+    const fi            = this._fallIntensity
+    const landed        = this._isGrounded && !this._prevGrounded
+    this._prevGrounded  = this._isGrounded
+
+    const targetVert = this._isGrounded ? 0 : fi * NIKO_FLOAT_MAX
+    const targetFwd  = this._isGrounded ? 0 : fi * NIKO_FWD_MAX
+    this._nikoVertOffset += (targetVert - this._nikoVertOffset) * Math.min(1, 12 * delta)
+    this._nikoFwdOffset  += (targetFwd  - this._nikoFwdOffset)  * Math.min(1, 12 * delta)
+
+    if (landed) {
+      this._nikoVertVel = -NIKO_IMPACT_KICK * fi
+      this._nikoFwdVel  = -NIKO_IMPACT_KICK * fi * 0.4
+    }
+    if (this._isGrounded) {
+      this._nikoVertVel    += (-this._nikoVertOffset * NIKO_SPRING_K - this._nikoVertVel * NIKO_SPRING_DAMPING) * delta
+      this._nikoVertOffset += this._nikoVertVel * delta
+      this._nikoFwdVel     += (-this._nikoFwdOffset  * NIKO_SPRING_K - this._nikoFwdVel  * NIKO_SPRING_DAMPING) * delta
+      this._nikoFwdOffset  += this._nikoFwdVel * delta
+    }
+
     this._nikoMesh.position.copy(basePos).add(this._nikoOscOffset)
+    this._nikoMesh.position.y += this._nikoVertOffset
+    this._nikoMesh.position.addScaledVector(fwd, this._nikoFwdOffset)
 
     // ─── Orientation (unchanged) ──────────────────────────────────────────────
     // held = faces away from player, hugging = faces player
@@ -315,13 +399,16 @@ export class PlayerController {
       if (this._fingersSprite) {
         this._fingersSprite.visible = handVisible
         this._fingersSprite.position.copy(handPos)
+        this._fingersSprite.position.y += this._nikoVertOffset
+        this._fingersSprite.position.addScaledVector(fwd, this._nikoFwdOffset)
         this._fingersSprite.scale.setScalar(NIKO.fingersScale)
-        // Mesh billboard — copy camera quaternion so it always faces the player.
         this._fingersSprite.quaternion.copy(this._camera.quaternion)
       }
       if (this._thumbSprite) {
         this._thumbSprite.visible = handVisible
         this._thumbSprite.position.copy(handPos)
+        this._thumbSprite.position.y += this._nikoVertOffset
+        this._thumbSprite.position.addScaledVector(fwd, this._nikoFwdOffset)
         this._thumbSprite.scale.setScalar(NIKO.thumbScale)
       }
     }

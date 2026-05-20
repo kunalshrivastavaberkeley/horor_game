@@ -3,6 +3,7 @@
 // and lighting controls. Fully separate instance from PlayerWalkMode.
 
 import * as THREE from 'three'
+import { DEATH_Y } from '../PlayerController.js'
 
 const MOUSE_SENSITIVITY  = 0.002
 const PITCH_CLAMP        = Math.PI / 4 - 0.01
@@ -27,6 +28,10 @@ export class DevWalkMode {
     this._tagRaycaster   = new THREE.Raycaster()
     this._tagDot         = this._buildTagDot()
     gsm.scene.add(this._tagDot)
+
+    this._killPlane      = this._buildKillPlane()
+    this._killPlaneOn    = true
+    gsm.scene.add(this._killPlane)
 
     this._yaw            = 0
     this._pitch          = 0
@@ -70,6 +75,7 @@ export class DevWalkMode {
       ['[  ]',      'ambient intensity'],
       ['F',         'toggle LOS node filter'],
       ['P',         'toggle Niko path visualizer'],
+      ['K',         'toggle kill-plane (fall death threshold)'],
     ]
   }
 
@@ -78,7 +84,8 @@ export class DevWalkMode {
     this._zoneEditor.setAllGroupsVisible(true)
     this._spatial?.setVisible(true)
     this._tags?.showCrosshair(this.camera)
-    this._tagDot.visible = true
+    this._tagDot.visible        = true
+    this._killPlane.visible     = this._killPlaneOn
     if (this._gsm.isActive) {
       this._renderer.domElement.requestPointerLock()
     }
@@ -92,7 +99,8 @@ export class DevWalkMode {
     this._zoneEditor.setAllGroupsVisible(false)
     this._spatial?.setVisible(false)
     this._tags?.hideCrosshair()
-    this._tagDot.visible = false
+    this._tagDot.visible    = false
+    this._killPlane.visible = false
     if (this._devLit) {
       this._lighting.setDevLighting(false)
       this._devLit = false
@@ -243,6 +251,12 @@ export class DevWalkMode {
         this._spatial.removeChamber(this._spatial.hoveredChamber)
         this._spatial.save().catch(err => console.warn('[DevWalkMode] spatial save failed:', err))
       }
+      return
+    }
+    if (e.key === 'k' || e.key === 'K') {
+      this._killPlaneOn       = !this._killPlaneOn
+      this._killPlane.visible = this._killPlaneOn
+      console.log(`[DevWalkMode] kill plane ${this._killPlaneOn ? 'on' : 'off'}`)
       return
     }
     if (e.key === 'l' || e.key === 'L') {
@@ -482,6 +496,31 @@ export class DevWalkMode {
     const meshes = []
     mesh.traverse(c => { if (c.isMesh) meshes.push(c) })
     return meshes
+  }
+
+  _buildKillPlane() {
+    const group = new THREE.Group()
+    group.position.y = DEATH_Y
+    group.visible    = false
+
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(600, 600),
+      new THREE.MeshBasicMaterial({
+        color: 0xff2200, transparent: true, opacity: 0.18,
+        side: THREE.DoubleSide, depthWrite: false,
+      }),
+    )
+    plane.rotation.x  = -Math.PI / 2
+    plane.renderOrder = 1
+    group.add(plane)
+
+    const grid = new THREE.GridHelper(600, 60, 0xff4400, 0xff4400)
+    grid.material.opacity     = 0.45
+    grid.material.transparent = true
+    grid.renderOrder          = 2
+    group.add(grid)
+
+    return group
   }
 
   _buildTagDot() {

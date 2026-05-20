@@ -10,7 +10,8 @@
   "dependencies": {
     "cannon-es": "^0.20.0",
     "three": "^0.165.0",
-    "three-mesh-bvh": "^0.9.10"
+    "three-mesh-bvh": "^0.9.10",
+    "three-subdivide": "^1.1.5"
   },
   "devDependencies": {
     "vite": "^5.0.0"

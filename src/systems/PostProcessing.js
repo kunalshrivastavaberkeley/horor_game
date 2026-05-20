@@ -3,9 +3,15 @@
 // Leaf node — no outputs.
 
 import * as THREE from 'three'
-import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js'
-import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
-import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import { EffectComposer }   from 'three/examples/jsm/postprocessing/EffectComposer.js'
+import { RenderPass }       from 'three/examples/jsm/postprocessing/RenderPass.js'
+import { ShaderPass }       from 'three/examples/jsm/postprocessing/ShaderPass.js'
+import { UnrealBloomPass }  from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
+
+// Bloom tuning — particles and the Niko bulb should glow; walls should not
+const BLOOM_STRENGTH  = 0.1   // intensity of the glow
+const BLOOM_RADIUS    = 0.6   // how far the glow spreads
+const BLOOM_THRESHOLD = 0.15  // luminance cutoff — only bright objects bloom
 
 const TIME_WRAP = 1000.0 // wrap time uniform at this value
 
@@ -52,18 +58,8 @@ const SanityShader = {
       uv.x += sin(time * 0.4) * inv * 0.005;
       uv.y += cos(time * 0.3) * inv * 0.003;
 
-      // Chromatic aberration — RGB channel separation
-      float aberr = inv * 0.012;
-      vec4 col;
-      col.r = texture2D(tDiffuse, clamp(uv + vec2(aberr, 0.0),  0.0, 1.0)).r;
-      col.g = texture2D(tDiffuse, clamp(uv,                      0.0, 1.0)).g;
-      col.b = texture2D(tDiffuse, clamp(uv - vec2(aberr, 0.0),  0.0, 1.0)).b;
+      vec4 col = texture2D(tDiffuse, clamp(uv, 0.0, 1.0));
       col.a = 1.0;
-
-      // Vignette — radial darkening from edges
-      vec2 vigUv = uv - 0.5;
-      float vig = 1.0 - dot(vigUv, vigUv) * 2.5 * inv;
-      col.rgb *= clamp(vig, 0.2, 1.0);
 
       // Desaturation — lerp toward grayscale
       float lum = dot(col.rgb, vec3(0.299, 0.587, 0.114));
@@ -100,6 +96,14 @@ export class PostProcessing {
     this._renderPass = new RenderPass(scene, camera)
     this._composer.addPass(this._renderPass)
 
+    this._bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      BLOOM_STRENGTH,
+      BLOOM_RADIUS,
+      BLOOM_THRESHOLD,
+    )
+    this._composer.addPass(this._bloomPass)
+
     this._shaderPass = new ShaderPass(SanityShader)
     this._shaderPass.renderToScreen = true
     this._composer.addPass(this._shaderPass)
@@ -119,16 +123,19 @@ export class PostProcessing {
   // ─── Main update + render ─────────────────────────────────────────────────────
 
   /**
-   * Update shader uniforms. Call before render().
    * @param {number} delta - seconds
-   * @param {number} sanityFloat - 0–1 from SanitySystem (1 = full, 0 = depleted)
    */
-  update(delta, sanityFloat) {
+  update(delta) {
     if (!this._gsm.isActive) return
 
     this._time = (this._time + delta) % TIME_WRAP
     this._shaderPass.uniforms.time.value = this._time
-    this._shaderPass.uniforms.sanityFloat.value = 1.0 - sanityFloat
+
+    const sanity = this._gsm.systems.sanity?.getSanity() ?? 1
+    this._shaderPass.uniforms.sanityFloat.value = 1.0 - sanity
+
+    // Bloom strength scales with light level — fewer particles = weaker glow
+    this._bloomPass.strength = BLOOM_STRENGTH * sanity
   }
 
   /**

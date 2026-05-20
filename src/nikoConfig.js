@@ -40,3 +40,4 @@ export const NIKO = {
   handFwd:     0.0,  // shift toward/away from camera (negative = closer to player)
 
 }
+    
