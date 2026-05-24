@@ -1,7 +1,7 @@
 import * as THREE from 'three'
 
 /**
- * Stateless utility. Single job: can snake see Niko light?
+ * Stateless utility. Single job: can snake see the lantern light?
  */
 export class LineOfSight {
   /**
@@ -14,15 +14,15 @@ export class LineOfSight {
 
   /**
    * @param {THREE.Vector3} snakeHeadPosition
-   * @param {THREE.Vector3} nikoLightPosition - player camera world position
+   * @param {THREE.Vector3} lanternLightPosition - player camera world position
    * @param {THREE.Object3D} [snakeMesh] - root of snake mesh, excluded from self-hit
-   * @returns {boolean} true if snake can see Niko light (no geometry between them)
+   * @returns {boolean} true if snake can see the lantern light (no geometry between them)
    */
-  check(snakeHeadPosition, nikoLightPosition, snakeMesh) {
+  check(snakeHeadPosition, lanternLightPosition, snakeMesh) {
     const dir = new THREE.Vector3()
-      .subVectors(nikoLightPosition, snakeHeadPosition)
+      .subVectors(lanternLightPosition, snakeHeadPosition)
       .normalize()
-    const dist = snakeHeadPosition.distanceTo(nikoLightPosition)
+    const dist = snakeHeadPosition.distanceTo(lanternLightPosition)
 
     this._raycaster.set(snakeHeadPosition, dir)
     this._raycaster.far = dist

@@ -1,0 +1,29 @@
+[
+  {
+    "layer": "dark_zones",
+    "x": -72.32142857142858,
+    "z": -9.703877599489791,
+    "width": 0.01,
+    "depth": 0.01,
+    "rotationY": 0,
+    "flag": "dark"
+  },
+  {
+    "layer": "dark_zones",
+    "x": 11.352040816326534,
+    "z": 4.199183694515311,
+    "width": 4,
+    "depth": 4,
+    "rotationY": 0,
+    "flag": "dark"
+  },
+  {
+    "layer": "dark_zones",
+    "x": -38.41836501140985,
+    "z": -13.173262721103738,
+    "width": 4,
+    "depth": 4,
+    "rotationY": 0,
+    "flag": "dark"
+  }
+]

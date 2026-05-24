@@ -1,30 +1,28 @@
 import * as THREE from 'three'
-import { GLTFLoader }      from 'three/examples/jsm/loaders/GLTFLoader.js'
-import { GameStateMachine } from './GameStateMachine/index.js'
-import { SceneManagement }  from './systems/SceneManagement.js'
-import { PlayerController } from './systems/PlayerController.js'
-import { ZoneSystem }       from './systems/ZoneSystem.js'
-import { ZoneEditor }       from './systems/ZoneEditor.js'
-import { MapEditor }        from './systems/MapEditor.js'
-import { ModeManager }      from './systems/ModeManager.js'
-import { PlayerWalkMode }   from './systems/modes/PlayerWalkMode.js'
-import { DevWalkMode }      from './systems/modes/DevWalkMode.js'
-import { FlyMode }          from './systems/modes/FlyMode.js'
-import { ZoneEditMode }     from './systems/modes/ZoneEditMode.js'
-import { OrbitMode }        from './systems/modes/OrbitMode.js'
-import { SanitySystem }     from './systems/SanitySystem.js'
-import { AudioManager }     from './systems/AudioManager.js'
-import { LightingSystem }   from './systems/LightingSystem.js'
-import { EnemySystem }      from './systems/EnemySystem.js'
-import { TriggerSystem }    from './systems/TriggerSystem.js'
-import { PostProcessing }   from './systems/PostProcessing.js'
-import { FogSystem }        from './systems/FogSystem.js'
-import { DustParticleSystem } from './systems/DustParticleSystem.js'
-import { TagSystem }        from './systems/TagSystem.js'
-import { SpatialSystem }    from './systems/SpatialSystem.js'
-import { NIKO }             from './nikoConfig.js'
+import { GLTFLoader }        from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { PanelManager }      from './systems/PanelManager.js'
+import { GameStateMachine }  from './GameStateMachine/index.js'
+import { SceneManagement }   from './systems/SceneManagement.js'
+import { PlayerController }  from './systems/PlayerController.js'
+import { MapEditor }         from './systems/MapEditor.js'
+import { AudioManager }      from './systems/AudioManager.js'
+import { LightingSystem }    from './systems/LightingSystem.js'
+import { EnemySystem }       from './systems/EnemySystem.js'
+import { TriggerSystem }     from './systems/TriggerSystem.js'
+import { TagSystem }         from './systems/TagSystem.js'
+import { SpatialSystem }     from './systems/SpatialSystem.js'
+import { PostProcessing }    from './systems/PostProcessing.js'
+import { IntroSequence }     from './systems/IntroSequence.js'
+import { CutscenePlayer }    from './systems/CutscenePlayer.js'
+import { PathRecorder }      from './systems/PathRecorder.js'
+import GameSettings          from '../data/settings.json'
+import { CameraController }  from './systems/CameraController.js'
+import { SettingsPanel }     from './systems/SettingsPanel.js'
+import { PresetManager }     from './systems/PresetManager.js'
+import { DevEditor }         from './systems/DevEditor.js'
+import { ScenePanel }        from './systems/ScenePanel.js'
+import { wireSettings }      from './systems/settingsWiring.js'
 
-const FOOTSTEP_INTERVAL = 0.45
 
 const EXIT_BOX = new THREE.Box3(
   new THREE.Vector3(70, -2, -15),
@@ -32,123 +30,71 @@ const EXIT_BOX = new THREE.Box3(
 )
 
 async function main() {
-  const gsm = new GameStateMachine()
+  const panelManager = new PanelManager()
+  const gsm = new GameStateMachine(panelManager.getContainer('viewport'))
 
   // ─── Audio ───────────────────────────────────────────────────────────────────
   const audioManager = new AudioManager()
   audioManager.preload()
   gsm.registerSystem('audio', audioManager)
 
-  // ─── Scene + zones (await before anything touches the mesh) ──────────────────
-  const zoneSystem = new ZoneSystem()
-
+  // ─── Scene ───────────────────────────────────────────────────────────────────
   let sceneReadyResolve
-  const sceneReady     = new Promise(r => { sceneReadyResolve = r })
+  const sceneReady      = new Promise(r => { sceneReadyResolve = r })
   const sceneManagement = new SceneManagement(gsm.scene, sceneReadyResolve)
   gsm.registerSystem('scene', sceneManagement)
-  sceneManagement.loadCatacomb('/models/catacomb.glb')
+  sceneManagement.loadCatacomb('/models/AO.glb')
 
-  await Promise.all([zoneSystem.load(), sceneReady])
-
+  await sceneReady
   sceneManagement.setCatacombStoneAppearance(0x000000, 0)
-
-  // Pass 3 — fog: height-based pooling at floor + animated FBM noise drift.
-  // Must run after setCatacombStoneAppearance so it patches the finalized materials.
-  const fogSystem = new FogSystem(gsm.scene, gsm)
-  fogSystem.applyFogToMesh(sceneManagement.getCatacombMesh())
-  gsm.registerSystem('fog', fogSystem)
 
   // ─── Player entity ───────────────────────────────────────────────────────────
   const playerController = new PlayerController(sceneManagement, gsm)
   gsm.registerSystem('player', playerController)
 
-  let _nikoScene = null
-  let _bulbScene = null
+  // ─── Game systems ─────────────────────────────────────────────────────────────
+  const lightingSystem = new LightingSystem(gsm.scene, gsm, gsm.renderer)
+  lightingSystem.init()
+  lightingSystem.applyLanternToScene()
+  gsm.registerSystem('lighting', lightingSystem)
 
-  function _attachBulbToNiko() {
-    _bulbScene.scale.setScalar(NIKO.bulbScale)
-    _bulbScene.position.set(NIKO.bulbX, NIKO.bulbY, NIKO.bulbZ)
-    _nikoScene.add(_bulbScene)
-    lightingSystem.setBulbMesh(_bulbScene)
-  }
-
-  const nikoLoader = new GLTFLoader()
-  nikoLoader.load(
+  // ─── Niko lantern model ───────────────────────────────────────────────────────
+  new GLTFLoader().load(
     '/models/niko.glb',
     (gltf) => {
       gltf.scene.traverse(o => {
-        if (o.isMesh) o.renderOrder = 2
+        if (!o.isMesh) return
+        o.renderOrder = 2
+
+        // Swap to MeshPhysicalMaterial so the lantern shader injection works
+        // and Niko responds to PBR lighting correctly
+        const old = o.material
+        o.material = new THREE.MeshPhysicalMaterial({
+          map:          old.map          ?? null,
+          normalMap:    old.normalMap    ?? null,
+          roughnessMap: old.roughnessMap ?? null,
+          metalnessMap: old.metalnessMap ?? null,
+          aoMap:        old.aoMap        ?? null,
+          color:        old.color        ?? new THREE.Color(0xffffff),
+          roughness:    old.roughness    ?? 1.0,
+          metalness:    old.metalness    ?? 0.0,
+          transparent:  old.transparent  ?? false,
+          opacity:      old.opacity      ?? 1.0,
+          side:         old.side         ?? THREE.FrontSide,
+          alphaTest:    old.alphaTest    ?? 0,
+        })
+        old.dispose()
       })
+
       gsm.scene.add(gltf.scene)
-      playerController.setNikoMesh(gltf.scene)
-      lightingSystem.setNikoMesh(gltf.scene)
-      _nikoScene = gltf.scene
-      if (_bulbScene) _attachBulbToNiko()
+      playerController.setLanternMesh(gltf.scene)
+      lightingSystem.setLanternMesh(gltf.scene)
+      // Inject lantern shader into Niko's new MeshPhysicalMaterial instances
+      lightingSystem.applyLanternToScene()
     },
     undefined,
     (err) => console.error('[main] Niko load failed:', err)
   )
-
-  // ─── Hand billboard — fingers BEHIND Niko, thumb IN FRONT ───────────────────
-  // Render order sandwich: sentinel clears depth (1) → Niko (2) → fingers (3) → thumb (4)
-  // The sentinel fires renderer.clearDepth() so Niko always draws in front of walls
-  // but still self-occludes correctly (depthTest stays ON for Niko's own meshes).
-  const _sentinel = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.001, 0.001),
-    new THREE.MeshBasicMaterial({ colorWrite: false, depthTest: false, depthWrite: false })
-  )
-  _sentinel.renderOrder = 1
-  _sentinel.frustumCulled = false
-  _sentinel.onBeforeRender = (renderer) => renderer.clearDepth()
-  gsm.scene.add(_sentinel)
-
-  const texLoader = new THREE.TextureLoader()
-
-  // fingers: renderOrder 3 — drawn after Niko (2) with depthTest ON → Niko's depth occludes it → behind Niko.
-  const fingersSprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: texLoader.load('/fingers.png'), transparent: true, depthTest: true, depthWrite: false })
-  )
-  fingersSprite.renderOrder = 3
-  fingersSprite.visible = false
-  gsm.scene.add(fingersSprite)
-
-  // thumb: renderOrder 4 — drawn last, depthTest OFF → always in front of everything.
-  const thumbSprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: texLoader.load('/thumb_1.png'), transparent: true, depthTest: false, depthWrite: false })
-  )
-  thumbSprite.renderOrder = 4
-  thumbSprite.visible = false
-  gsm.scene.add(thumbSprite)
-
-  playerController.setHandSprites(thumbSprite, fingersSprite)
-
-  const bulbLoader = new GLTFLoader()
-  bulbLoader.load(
-    '/models/the_sun_from_oneshot.glb',
-    (gltf) => {
-      console.log('[main] Bulb loaded:', gltf.scene)
-      let meshCount = 0
-      gltf.scene.traverse(o => { if (o.isMesh) { console.log('[main] Bulb mesh:', o.name, 'mat:', o.material?.type); meshCount++ } })
-      console.log('[main] Bulb mesh count:', meshCount)
-      _bulbScene = gltf.scene
-      if (_nikoScene) _attachBulbToNiko()
-    },
-    undefined,
-    (err) => console.error('[main] Bulb load failed:', err)
-  )
-
-  // ─── Game systems ─────────────────────────────────────────────────────────────
-  const sanitySystem = new SanitySystem(gsm)
-  gsm.registerSystem('sanity', sanitySystem)
-
-  const lightingSystem = new LightingSystem(gsm.scene, gsm)
-  lightingSystem.init(zoneSystem.zones)
-  gsm.registerSystem('lighting', lightingSystem)
-
-  const dustSystem = new DustParticleSystem(gsm.scene, gsm)
-  dustSystem.setNikoLight(lightingSystem.getNikoLight())
-  dustSystem.setCatacombMesh(sceneManagement.getCatacombMesh())
-  gsm.registerSystem('dust', dustSystem)
 
   const enemySystem = new EnemySystem(gsm.scene)
   enemySystem.init()
@@ -157,14 +103,7 @@ async function main() {
   const triggerSystem = new TriggerSystem()
   triggerSystem.registerTrigger(EXIT_BOX, () => gsm.onExitReached(), 'exit')
 
-  const postProcessing = new PostProcessing(gsm.renderer, gsm.scene, gsm.camera, gsm)
-  gsm.setPostProcessing(postProcessing)
-  gsm.registerSystem('postProcessing', postProcessing)
-
   // ─── Dev tools ───────────────────────────────────────────────────────────────
-  const zoneEditor = new ZoneEditor(gsm.scene)
-  await zoneEditor.load()
-
   const tagSystem = new TagSystem(gsm.scene)
   await tagSystem.load()
 
@@ -176,25 +115,84 @@ async function main() {
     playerController.collision?.setExtraWallMeshes(mapEditor.getWallMeshes())
   }
 
-  // ─── Mode setup ───────────────────────────────────────────────────────────────
-  const modeManager = new ModeManager(gsm.renderer)
+  // ─── Camera paths (created early so settingsWiring can reference it) ─────────
+  const pathRecorder = new PathRecorder('intro', gsm.scene, gsm)
 
-  const playerWalkMode = new PlayerWalkMode(gsm.camera, playerController, gsm.renderer, gsm, modeManager, tagSystem)
-  const devWalkMode    = new DevWalkMode(gsm.camera, playerController, gsm.renderer, gsm, modeManager, zoneEditor, lightingSystem, tagSystem, sceneManagement, spatialSystem)
-  const flyMode        = new FlyMode(gsm.renderer, playerController, lightingSystem, modeManager, gsm.scene)
-  const zoneEditMode   = new ZoneEditMode(gsm.renderer, gsm.scene, zoneEditor, lightingSystem, tagSystem)
-  const orbitMode      = new OrbitMode(mapEditor)
+  // ─── Settings + panel ─────────────────────────────────────────────────────────
+  const presetManager = new PresetManager()
+  const panel         = new SettingsPanel(presetManager, panelManager.getContainer('settings'))
+  gsm.registerSystem('settings', GameSettings)   // render loop reads settings.minimap
 
-  modeManager.register('playerWalk', playerWalkMode)
-  modeManager.register('devWalk',    devWalkMode)
-  modeManager.register('fly',        flyMode)
-  modeManager.register('zoneEdit',   zoneEditMode)
-  modeManager.register('orbit',      orbitMode)
-  modeManager.start('playerWalk')
+  // ─── Camera controller ────────────────────────────────────────────────────────
+  const cameraController = new CameraController(
+    gsm.camera, playerController, GameSettings, gsm.renderer, gsm.scene
+  )
+  gsm.registerSystem('cameraController', cameraController)
+  gsm.setCameraController(cameraController)
 
-  gsm.setModeManager(modeManager)
-  gsm.setMinimap(zoneEditor.camera)
-  gsm.registerSystem('modeManager', modeManager)
+  // Standalone top-down orthographic camera for minimap
+  const _minimapCam = (() => {
+    const frustum = 50
+    const vEl     = gsm._viewportEl
+    const aspect  = (vEl.clientWidth || window.innerWidth) / (vEl.clientHeight || window.innerHeight)
+    const cam = new THREE.OrthographicCamera(
+      -frustum * aspect, frustum * aspect, frustum, -frustum, 0.1, 1000
+    )
+    cam.position.set(0, 100, 0)
+    cam.lookAt(0, 0, 0)
+    cam.up.set(0, 0, -1)
+    new ResizeObserver(entries => {
+      const { width, height } = entries[0].contentRect
+      if (!width || !height) return
+      const a = width / height
+      cam.left = -frustum * a; cam.right = frustum * a
+      cam.updateProjectionMatrix()
+    }).observe(vEl)
+    return cam
+  })()
+  gsm.setMinimap(_minimapCam)
+
+  // Register focusable providers for examine mode
+  cameraController.registerFocusableProvider(spatialSystem)
+  cameraController.registerFocusableProvider(tagSystem)
+
+  // ─── Dev editor (graph + tag editing tools) ───────────────────────────────────
+  const devEditor = new DevEditor(
+    cameraController, GameSettings, spatialSystem, tagSystem, sceneManagement, gsm
+  )
+
+  // ─── Scene panel ─────────────────────────────────────────────────────────────
+  const scenePanel = new ScenePanel(spatialSystem, tagSystem, cameraController, panelManager.getContainer('scene'))
+  devEditor.onDataChanged = () => scenePanel.refresh()
+
+  // ─── Post-processing ─────────────────────────────────────────────────────────
+  const postProcessing = new PostProcessing(gsm.renderer, gsm.scene, gsm.camera)
+  gsm.registerSystem('postProcessing', postProcessing)
+
+  // ─── Boot sequence ────────────────────────────────────────────────────────────
+  // 1. Give the preset manager references to the systems it needs for exit behaviors
+  presetManager.init({ cameraController, playerController })
+
+  // 2. Wire the settings panel to system handlers so changes propagate
+  wireSettings(panel, {
+    GameSettings,
+    cameraController,
+    playerController,
+    lightingSystem,
+    spatialSystem,
+    tagSystem,
+    postProcessing,
+    pathRecorder,
+    sceneManagement,
+    gsm,
+  })
+  panel.buildPathManager(pathRecorder)
+
+  // 3. Enter Play — writes Play settings into GameSettings
+  presetManager.activate('Play')
+
+  // 4. Push current GameSettings to all systems and sync the panel UI
+  panel.applyAll()
 
   // ─── Minimap markers ─────────────────────────────────────────────────────────
   const playerMarker = new THREE.Mesh(
@@ -214,10 +212,9 @@ async function main() {
   gsm.scene.add(flyMarker)
 
   // ─── Cross-system callbacks ───────────────────────────────────────────────────
-  playerController.onNikoStateChange = (state) => {
-    sanitySystem.onNikoStateChange(state)
-    if (state === 'hugging')   audioManager.playNikoHug()
-    else if (state === 'held') audioManager.playNikoPutdown()
+  playerController.onLanternStateChange = (state) => {
+    if (state === 'hugging')   audioManager.playLanternHug()
+    else if (state === 'held') audioManager.playLanternPutdown()
   }
 
   playerController.onArtifactPickedUp = () => {
@@ -227,83 +224,52 @@ async function main() {
 
   playerController.onPause = () => gsm.onPause()
 
-  zoneSystem.onDarknessChange = (isDark) => sanitySystem.onDarknessChange(isDark)
-
-  enemySystem.onStageChange = (_stage) => { /* PresenceSystem receives this */ }
-
   // ─── Coordinator ─────────────────────────────────────────────────────────────
-  let footstepTimer = 0
-
   const coordinator = {
     update(delta) {
       mapEditor.update()
+      pathRecorder.tick(delta)
+
+      // Sync focus label in panel
+      panel.updateFocusLabel(cameraController.examFocusLabel)
+
+      // Dev editor tools (graph + tag editing)
+      devEditor.update()
+
       if (!gsm.isActive) return
 
-      const pos   = playerController.playerPosition
-      const inFly = modeManager.activeKey === 'fly'
+      const pos    = playerController.playerPosition
+      const inFly  = cameraController.activeType === 'fly'
+      const inExam = cameraController.activeType === 'orbit'
 
+      // Minimap markers
       playerMarker.position.set(pos.x, 80, pos.z)
-      playerMarker.visible = inFly
+      playerMarker.visible = inFly && GameSettings.minimap
+      if (inFly) {
+        const camPos = cameraController.cameraPosition
+        flyMarker.position.set(camPos.x, 80, camPos.z)
+      }
+      flyMarker.visible = inFly && GameSettings.minimap
 
-      flyMarker.position.set(flyMode.camera.position.x, 80, flyMode.camera.position.z)
-      flyMarker.visible = inFly
-
-      playerController.setBodyVisible(inFly)
-
-      sanitySystem.setLightRatio(dustSystem.getLightRatio())
-
-      zoneSystem.update(pos)
-      triggerSystem.update(pos)
+      if (GameSettings.collision) triggerSystem.update(pos)
 
       enemySystem.setPlayerPosition(pos)
-      enemySystem.setPlayerLightLevel(zoneSystem.getPlayerLightLevel(pos.x, pos.z))
-      enemySystem.updateGodHelpers(inFly)
+      enemySystem.updateGodHelpers(inFly || inExam)
 
-      audioManager.onSanityChange(sanitySystem.getSanity())
-
-      if (playerController.movementState === 'walking') {
-        footstepTimer -= delta
-        if (footstepTimer <= 0) {
-          audioManager.playFootstep()
-          footstepTimer = FOOTSTEP_INTERVAL
-        }
-      } else {
-        footstepTimer = 0
-      }
     }
   }
   gsm.registerSystem('coordinator', coordinator)
 
-  // ─── Negative-emission skull test ────────────────────────────────────────────
-  let negSphere = null
-  const skullLoader = new GLTFLoader()
-  skullLoader.load(
-    '/models/skull_downloadable.glb',
-    (gltf) => {
-      negSphere = gltf.scene
-      const negMat = new THREE.MeshStandardMaterial({
-        color:             0x000000,
-        emissive:          new THREE.Color(1, 1, 1),
-        emissiveIntensity: 0.1,
-        blending:          THREE.SubtractiveBlending,
-        depthWrite:        false,
-      })
-      negSphere.traverse(child => { if (child.isMesh) child.material = negMat })
-      negSphere.position.set(-53.0, 4, -30)
-      negSphere.rotation.y = -Math.PI / 2
-      negSphere.scale.setScalar(0.3)
-      gsm.scene.add(negSphere)
-      dustSystem.setMonster(negSphere)
-    },
-    undefined,
-    (err) => console.error('[main] Skull load failed:', err)
-  )
-
-  const testLight = new THREE.PointLight(0xffffff, 8, 6)
-  testLight.position.set(-53.0, 4, -30)
-  gsm.scene.add(testLight)
-
   gsm.camera.position.copy(playerController.playerPosition)
+
+  // ─── Camera paths ────────────────────────────────────────────────────────────
+  const introPathData = await CutscenePlayer.loadPath('intro')
+  if (introPathData?.waypoints?.length >= 2) {
+    pathRecorder.setWaypoints(introPathData.waypoints)
+  }
+
+  // ─── Intro sequence ───────────────────────────────────────────────────────────
+  gsm.introSequence = new IntroSequence(gsm, playerController, cameraController, introPathData)
 
   console.log('[main] All systems initialized — starting game')
   gsm.start()

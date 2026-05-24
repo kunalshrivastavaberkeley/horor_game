@@ -1,0 +1,80 @@
+{
+  "camera": {
+    "label": "Camera",
+    "settings": {
+      "cameraType": { "label": "type",       "options": ["firstPerson", "orbit"] },
+      "projection":  { "label": "projection", "options": ["perspective", "ortho"] }
+    }
+  },
+  "body": {
+    "label": "Body",
+    "settings": {
+      "physicsMesh":  { "label": "physics mesh" },
+      "lanternMesh":  { "label": "lantern mesh" }
+    }
+  },
+  "gameSystems": {
+    "label": "Game Systems",
+    "closed": true,
+    "settings": {
+      "collision":  { "label": "collision" }
+    }
+  },
+  "overlays": {
+    "label": "Overlays",
+    "settings": {
+      "spatialGraph":   { "label": "spatial graph" },
+      "tags":           { "label": "tags" },
+      "pathOverlay":    { "label": "paths" },
+      "lanternPathVis": { "label": "lantern path" },
+      "minimap":        { "label": "minimap" },
+      "coordsHUD":      { "label": "coords HUD" },
+      "killPlane":      { "label": "kill plane" },
+      "catacombs":      { "label": "catacombs" }
+    }
+  },
+  "lighting": {
+    "label": "Lighting",
+    "closed": true,
+    "settings": {
+      "devLighting":  { "label": "dev lighting" },
+      "lightHelper":  { "label": "light helper" },
+      "orbX": { "label": "orb X", "min": -5, "max": 5, "step": 0.05 },
+      "orbY": { "label": "orb Y", "min": -5, "max": 5, "step": 0.05 },
+      "orbZ": { "label": "orb Z", "min": -5, "max": 5, "step": 0.05 },
+      "posLightRadius":    { "label": "light radius",    "min": 0,   "max": 10, "step": 0.5    },
+      "posLightIntensity": { "label": "light strength",  "min": 0,   "max": 100, "step": 0.1  },
+      "posNdotL":          { "label": "light NdotL",     "min": 0,   "max": 1,   "step": 0.01 },
+      "crawlRadius":    { "label": "crawl radius",   "min": 0, "max": 10, "step": 0.5  },
+      "crawlIntensity": { "label": "crawl strength", "min": 0, "max": 100, "step": 0.1  },
+      "crawlNdotL":     { "label": "crawl NdotL",    "min": 0, "max": 1,   "step": 0.01 }
+    }
+  },
+  "cameraEffects": {
+    "label": "Camera Effects",
+    "closed": true,
+    "settings": {
+      "headBob":    { "label": "head bob",    "requires": { "cameraType": "firstPerson" } },
+      "pitchDrift": { "label": "pitch drift", "requires": { "cameraType": "firstPerson" } },
+      "pitchLimit": { "label": "pitch limit (°)", "requires": { "cameraType": "firstPerson" } },
+      "motionBlur": { "label": "motion blur", "requires": { "cameraType": "firstPerson" } }
+    }
+  },
+  "lantern": {
+    "label": "Lantern",
+    "closed": true,
+    "settings": {
+      "lanternSheen":          { "label": "sheen",           "min": 0, "max": 1, "step": 0.01 },
+      "lanternSheenRoughness": { "label": "sheen roughness", "min": 0, "max": 1, "step": 0.01 }
+    }
+  },
+  "editingTools": {
+    "label": "Editing Tools",
+    "closed": true,
+    "settings": {
+      "graphEditor":  { "label": "graph editor",  "requires": { "spatialGraph": true } },
+      "tagEditor":    { "label": "tag editor",     "requires": { "tags": true } },
+      "pathRecorder": { "label": "path recorder",  "requires": { "cameraType": "firstPerson" } }
+    }
+  }
+}

@@ -8,10 +8,15 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/extensions": "^4.3.0",
     "cannon-es": "^0.20.0",
+    "dockview-core": "^6.5.0",
+    "recast-navigation": "^0.43.1",
     "three": "^0.165.0",
     "three-mesh-bvh": "^0.9.10",
-    "three-subdivide": "^1.1.5"
+    "three-subdivide": "^1.1.5",
+    "tweakpane": "^4.0.5"
   },
   "devDependencies": {
     "vite": "^5.0.0"

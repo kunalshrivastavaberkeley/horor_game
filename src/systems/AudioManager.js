@@ -19,35 +19,25 @@ const AUDIO_CONFIG = {
     end:    0.4,
   },
   actionVolume: {
-    footstep:    0.4,
-    nikoPickup:  0.5,
-    nikoPutdown: 0.5,
-    nikoHug:     0.6,
-    uiButton:    0.3,
-  },
-  sanityDistortion: {
-    minIntensity:    0.0,     // at sanity=1 (full)
-    maxIntensity:    0.8,     // at sanity=0 (depleted)
-    filterFreqOpen:  20000,   // Hz — filter fully open
-    filterFreqClosed: 500,    // Hz — filter fully closed (distorted)
-    filterType:      'lowpass',
+    lanternPickup:  0.5,
+    lanternPutdown: 0.5,
+    lanternHug:     0.6,
+    uiButton:       0.3,
   }
 }
 
 // Maps GSM state names to audio files
 const SCENE_AUDIO = {
-  MENU:   'menu-ambient.mp3',
-  INTRO:  'intro-audio.mp3',
-  DESERT: 'desert-ambient.mp3',
-  TEMPLE: 'temple-ambient.mp3',
-  END:    'end-audio.mp3',
+  MENU:  'menu-ambient.mp3',
+  INTRO: 'intro-audio.mp3',
+  PLAY:  'play-ambient.mp3',
+  END:   'end-audio.mp3',
 }
 
 const ALL_AUDIO_FILES = [
-  'menu-ambient.mp3', 'intro-audio.mp3', 'desert-ambient.mp3',
-  'temple-ambient.mp3', 'end-audio.mp3',
-  'footstep-a.mp3', 'footstep-b.mp3',
-  'niko-pickup.mp3', 'niko-putdown.mp3', 'niko-hug.mp3', 'ui-button.mp3'
+  'menu-ambient.mp3', 'intro-audio.mp3', 'play-ambient.mp3',
+  'end-audio.mp3',
+'niko-pickup.mp3', 'niko-putdown.mp3', 'niko-hug.mp3', 'ui-button.mp3'
 ]
 
 export class AudioManager {
@@ -61,16 +51,12 @@ export class AudioManager {
     this._sceneGain = null
     this._transitionGain = null
     this._actionGain = null
-    this._distortionFilter = null
-
     this._sceneSource = null      // currently playing scene BufferSource
     this._transitionSource = null
     this._crossfadeTimeout = null
 
     this._currentState = null
     this._prevState = null
-    this._footstepToggle = 0
-
     // Gate: unlock AudioContext on first user interaction
     document.addEventListener('click', () => this._unlock(), { once: true })
   }
@@ -89,7 +75,7 @@ export class AudioManager {
 
   /**
    * Called by GameStateMachine (or flow states) when GSM state changes.
-   * @param {'MENU'|'INTRO'|'DESERT'|'TEMPLE'|'END'|'SETTINGS'} stateName
+   * @param {'MENU'|'INTRO'|'PLAY'|'END'|'SETTINGS'} stateName
    */
   onStateChange(stateName) {
     this._prevState = this._currentState
@@ -186,16 +172,10 @@ export class AudioManager {
 
   // ─── Action sounds ───────────────────────────────────────────────────────────
 
-  playFootstep() {
-    const name = this._footstepToggle % 2 === 0 ? 'footstep-a.mp3' : 'footstep-b.mp3'
-    this._footstepToggle++
-    this._playAction(name, AUDIO_CONFIG.actionVolume.footstep)
-  }
-
-  playNikoPickup()  { this._playAction('niko-pickup.mp3',  AUDIO_CONFIG.actionVolume.nikoPickup) }
-  playNikoPutdown() { this._playAction('niko-putdown.mp3', AUDIO_CONFIG.actionVolume.nikoPutdown) }
-  playNikoHug()     { this._playAction('niko-hug.mp3',     AUDIO_CONFIG.actionVolume.nikoHug) }
-  playUIButton()    { this._playAction('ui-button.mp3',    AUDIO_CONFIG.actionVolume.uiButton) }
+  playLanternPickup()  { this._playAction('niko-pickup.mp3',  AUDIO_CONFIG.actionVolume.lanternPickup) }
+  playLanternPutdown() { this._playAction('niko-putdown.mp3', AUDIO_CONFIG.actionVolume.lanternPutdown) }
+  playLanternHug()     { this._playAction('niko-hug.mp3',     AUDIO_CONFIG.actionVolume.lanternHug) }
+  playUIButton()       { this._playAction('ui-button.mp3',    AUDIO_CONFIG.actionVolume.uiButton) }
 
   _playAction(filename, vol) {
     if (!this._ctx || !this._buffers[filename]) return
@@ -213,22 +193,6 @@ export class AudioManager {
     }
   }
 
-  // ─── Sanity distortion ───────────────────────────────────────────────────────
-
-  /**
-   * Called each frame (by main.js) with current sanity value.
-   * Distortion only active in TEMPLE state.
-   * @param {number} sanity 0–1
-   */
-  onSanityChange(sanity) {
-    if (this._currentState !== 'TEMPLE' || !this._ctx || !this._distortionFilter) return
-    const cfg = AUDIO_CONFIG.sanityDistortion
-    const t = 1 - sanity  // 0 = sane (open filter), 1 = depleted (closed filter)
-    const intensity = cfg.minIntensity + t * (cfg.maxIntensity - cfg.minIntensity)
-    const freq = cfg.filterFreqOpen - intensity * (cfg.filterFreqOpen - cfg.filterFreqClosed)
-    this._distortionFilter.frequency.setTargetAtTime(freq, this._ctx.currentTime, 0.1)
-  }
-
   // ─── Unlock / preload ─────────────────────────────────────────────────────────
 
   async _unlock() {
@@ -241,20 +205,13 @@ export class AudioManager {
     this._masterGain.gain.value = 1
     this._masterGain.connect(this._ctx.destination)
 
-    // Distortion filter — inline between scene/transition and master
-    // Frequency starts fully open (20kHz); modulated by sanity in TEMPLE
-    this._distortionFilter = this._ctx.createBiquadFilter()
-    this._distortionFilter.type = AUDIO_CONFIG.sanityDistortion.filterType
-    this._distortionFilter.frequency.value = AUDIO_CONFIG.sanityDistortion.filterFreqOpen
-    this._distortionFilter.connect(this._masterGain)
-
     this._sceneGain = this._ctx.createGain()
     this._sceneGain.gain.value = 0
-    this._sceneGain.connect(this._distortionFilter)  // scene → filter → master
+    this._sceneGain.connect(this._masterGain)
 
     this._transitionGain = this._ctx.createGain()
     this._transitionGain.gain.value = 0
-    this._transitionGain.connect(this._distortionFilter)  // transition → filter → master
+    this._transitionGain.connect(this._masterGain)
 
     this._actionGain = this._ctx.createGain()
     this._actionGain.gain.value = 1
@@ -287,12 +244,9 @@ export class AudioManager {
 
   /**
    * Called by GSM render loop each frame.
-   * Sanity distortion is driven by caller passing sanity value.
-   * Footsteps driven externally via playFootstep() calls from PlayerController.
    * @param {number} _delta - unused but present for system interface consistency
    */
   update(_delta) {
     // Intentionally minimal — audio is event-driven, not per-frame polled
-    // Sanity distortion updated via onSanityChange() call from main.js each frame
   }
 }

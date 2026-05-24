@@ -1,6 +1,6 @@
 // src/systems/SpatialSystem.js
 // Halls (nodes + edges) and Chambers (named polygon volumes).
-// Editable in DevWalkMode while walking. Separate from the 2D zone system.
+// Editable in DevWalkMode while walking.
 
 import * as THREE from 'three'
 
@@ -8,18 +8,30 @@ const NODE_COLOR      = 0x00ccff
 const NODE_HOVER      = 0xffcc00
 const NODE_ANCHOR     = 0x00ff88
 const NODE_GRABBED    = 0xffffff
-const NODE_CHAMBER    = 0xff8800   // node is in the active chamber buffer
+const NODE_CHAMBER    = 0xffee00   // node is in the active chamber buffer (yellow — distinct from orange boundary)
 const NODE_GATEWAY    = 0xaa44ff   // hall node on a chamber boundary edge — gateway
 const GATEWAY_THRESHOLD = 0.8      // world units — how close to a boundary edge = gateway
 const CHAMBER_COLOR   = 0xff8800
 const CHAMBER_OPACITY = 0.22
 const CHAMBER_HOVER_OPACITY = 0.42
+const GHOST_OPACITY        = 0.12   // nodes/edges visible through walls
+const CHAMBER_GHOST_OPACITY = 0.07  // chamber polygon visible through walls
 const NODE_RADIUS  = 0.12
 const LABEL_W      = 256
 const LABEL_H      = 48
+const MAX_HISTORY  = 60
 
+// Module-level counter — seeded to max(stored ids) + 1 after each load, preventing collisions.
 let _nextId = 1
 const uid = () => String(_nextId++)
+
+function _seedNextId(nodes, edges, chambers) {
+  let max = 0
+  for (const n of nodes)    { const v = parseInt(n.id); if (v > max) max = v }
+  for (const e of edges)    { const v = parseInt(e.id); if (v > max) max = v }
+  for (const c of chambers) { const v = parseInt(c.id); if (v > max) max = v }
+  _nextId = max + 1
+}
 
 export class SpatialSystem {
   constructor(scene) {
@@ -37,8 +49,8 @@ export class SpatialSystem {
     this._hoveredChamber = null
     this._anchorNode     = null
     this._grabbedNode    = null
-    this._chamberNodes   = new Set()   // nodes currently in the chamber buffer
-    this._gatewayMap     = new Map()   // node → chamber (auto-computed from spatial containment)
+    this._chamberNodes   = new Set()
+    this._gatewayMap     = new Map()
 
     this._raycaster = new THREE.Raycaster()
     this._raycaster.params.Line = { threshold: 0.35 }
@@ -46,6 +58,10 @@ export class SpatialSystem {
 
     this._losMode      = false
     this._losRaycaster = new THREE.Raycaster()
+
+    // Undo / redo history
+    this._undoStack = []   // snapshots before each mutation
+    this._redoStack = []
   }
 
   // ─── Public reads ─────────────────────────────────────────────────────────────
@@ -59,12 +75,27 @@ export class SpatialSystem {
   get edgeCount()      { return this._edges.length }
   get chamberCount()   { return this._chambers.length }
   get visible()        { return this._group.visible }
+  get canUndo()        { return this._undoStack.length > 0 }
+  get canRedo()        { return this._redoStack.length > 0 }
 
-  /** All chambers — used by the presence system for containment queries. */
   get chambers() { return this._chambers }
-
-  /** node → chamber map — used by the presence system. */
   get gatewayMap() { return this._gatewayMap }
+
+  /** IFocusable — returns all nodes and chamber centroids for CameraController examine mode. */
+  getFocusables() {
+    const out = []
+    for (const n of this._nodes) {
+      out.push({ id: `node_${n.id}`, label: n.label || `Node ${n.id}`, position: n.position.clone() })
+    }
+    for (const c of this._chambers) {
+      if (c.nodes.length === 0) continue
+      const centroid = c.nodes.reduce(
+        (acc, n) => acc.add(n.position), new THREE.Vector3()
+      ).divideScalar(c.nodes.length)
+      out.push({ id: `chamber_${c.id}`, label: c.label || `Chamber ${c.id}`, position: centroid })
+    }
+    return out
+  }
 
   /** True if this XZ position is strictly inside any chamber — node placement blocked here. */
   isInsideChamber(x, z) { return this.chamberAtPoint(x, z) !== null }
@@ -79,7 +110,6 @@ export class SpatialSystem {
 
   /** Recompute gateway nodes: hall nodes on a chamber boundary (not inside, not boundary-defining). */
   computeGateways() {
-    // Build the set of nodes that are chamber boundary vertices — exclude from gateway detection
     const boundaryNodes = new Set()
     for (const chamber of this._chambers) {
       for (const n of chamber.nodes) boundaryNodes.add(n)
@@ -89,10 +119,10 @@ export class SpatialSystem {
     this._gatewayMap.clear()
 
     for (const node of this._nodes) {
-      if (boundaryNodes.has(node)) continue   // chamber boundary node — not a gateway
+      if (boundaryNodes.has(node)) continue
       const x = node.position.x, z = node.position.z
       for (const chamber of this._chambers) {
-        if (this._pointInPolygon(x, z, chamber.nodes)) break  // inside — blocked, not a gateway
+        if (this._pointInPolygon(x, z, chamber.nodes)) break
         if (this._distToBoundary(x, z, chamber.nodes) <= GATEWAY_THRESHOLD) {
           this._gatewayMap.set(node, chamber)
           break
@@ -100,7 +130,6 @@ export class SpatialSystem {
       }
     }
 
-    // Refresh colors for nodes whose status changed, plus all boundary nodes
     for (const node of this._nodes) {
       if (boundaryNodes.has(node) || prev.has(node) !== this._gatewayMap.has(node)) {
         this._refreshNodeColor(node)
@@ -108,7 +137,6 @@ export class SpatialSystem {
     }
   }
 
-  /** Ray-cast point-in-polygon on XZ plane. */
   _pointInPolygon(x, z, polygonNodes) {
     const n = polygonNodes.length
     let inside = false
@@ -122,7 +150,6 @@ export class SpatialSystem {
     return inside
   }
 
-  /** Minimum distance from (x,z) to any EDGE SEGMENT of a polygon on XZ plane. */
   _distToBoundary(x, z, polygonNodes) {
     const n = polygonNodes.length
     let minDist = Infinity
@@ -132,8 +159,7 @@ export class SpatialSystem {
       const dx = b.x - a.x
       const dz = b.z - a.z
       const lenSq = dx * dx + dz * dz
-      if (lenSq === 0) continue   // degenerate edge — skip
-      // Project point onto segment, clamped to [0,1]
+      if (lenSq === 0) continue
       const t  = Math.max(0, Math.min(1, ((x - a.x) * dx + (z - a.z) * dz) / lenSq))
       const cx = a.x + t * dx
       const cz = a.z + t * dz
@@ -142,7 +168,6 @@ export class SpatialSystem {
     return minDist
   }
 
-  /** Call whenever the chamber buffer changes to keep node colors in sync. */
   setChamberNodes(nodes) {
     const prev = this._chamberNodes
     this._chamberNodes = new Set(nodes)
@@ -150,17 +175,57 @@ export class SpatialSystem {
     for (const node of affected) this._refreshNodeColor(node)
   }
 
+  // ─── Undo / Redo ──────────────────────────────────────────────────────────────
+
+  /** Call before any mutation — saves current state so it can be undone. */
+  _pushHistory() {
+    this._undoStack.push(this._snapshot())
+    if (this._undoStack.length > MAX_HISTORY) this._undoStack.shift()
+    this._redoStack = []
+  }
+
+  _snapshot() {
+    return {
+      nodes:    this._nodes.map(n => ({ id: n.id, x: n.position.x, y: n.position.y, z: n.position.z, label: n.label })),
+      edges:    this._edges.map(e => ({ id: e.id, a: e.a.id, b: e.b.id, label: e.label })),
+      chambers: this._chambers.map(c => ({ id: c.id, nodes: c.nodes.map(n => n.id), label: c.label })),
+    }
+  }
+
+  undo() {
+    if (this._undoStack.length === 0) return false
+    this._redoStack.push(this._snapshot())
+    const snap = this._undoStack.pop()
+    this._restoreSnapshot(snap)
+    return true
+  }
+
+  redo() {
+    if (this._redoStack.length === 0) return false
+    this._undoStack.push(this._snapshot())
+    const snap = this._redoStack.pop()
+    this._restoreSnapshot(snap)
+    return true
+  }
+
   // ─── Nodes ────────────────────────────────────────────────────────────────────
 
   placeNode(position, label = '') {
     const geo  = new THREE.SphereGeometry(NODE_RADIUS, 8, 8)
-    const mat  = new THREE.MeshBasicMaterial({ color: NODE_COLOR, depthTest: false })
+    const mat  = new THREE.MeshBasicMaterial({ color: NODE_COLOR, depthTest: true })
     const mesh = new THREE.Mesh(geo, mat)
     mesh.position.copy(position)
     mesh.renderOrder = 999
     this._group.add(mesh)
 
-    const node = { id: uid(), position: position.clone(), label, mesh, sprite: null }
+    const ghostGeo  = new THREE.SphereGeometry(NODE_RADIUS, 8, 8)
+    const ghostMat  = new THREE.MeshBasicMaterial({ color: NODE_COLOR, transparent: true, opacity: GHOST_OPACITY, depthTest: false, depthWrite: false })
+    const ghostMesh = new THREE.Mesh(ghostGeo, ghostMat)
+    ghostMesh.position.copy(position)
+    ghostMesh.renderOrder = 997
+    this._group.add(ghostMesh)
+
+    const node = { id: uid(), position: position.clone(), label, mesh, ghostMesh, sprite: null }
     mesh.userData.spatialNode = node
     this._nodes.push(node)
 
@@ -170,12 +235,17 @@ export class SpatialSystem {
   }
 
   removeNode(node) {
-    for (const e of this._edges.filter(e => e.a === node || e.b === node))         this._removeEdgeObj(e)
+    for (const e of this._edges.filter(e => e.a === node || e.b === node)) this._removeEdgeObj(e)
     for (const c of this._chambers.filter(c => c.nodes.includes(node))) this._removeChamberObj(c)
 
     this._group.remove(node.mesh)
     node.mesh.geometry.dispose()
     node.mesh.material.dispose()
+    if (node.ghostMesh) {
+      this._group.remove(node.ghostMesh)
+      node.ghostMesh.geometry.dispose()
+      node.ghostMesh.material.dispose()
+    }
     this._disposeSprite(node)
 
     this._nodes = this._nodes.filter(n => n !== node)
@@ -205,22 +275,27 @@ export class SpatialSystem {
   _refreshNodeColor(node) {
     if (!node?.mesh) return
     const isBoundary = this._chambers.some(c => c.nodes.includes(node))
-    if (node === this._grabbedNode)        node.mesh.material.color.setHex(NODE_GRABBED)
-    else if (node === this._anchorNode)    node.mesh.material.color.setHex(NODE_ANCHOR)
-    else if (this._chamberNodes.has(node)) node.mesh.material.color.setHex(NODE_CHAMBER)
-    else if (isBoundary)                   node.mesh.material.color.setHex(CHAMBER_COLOR)
-    else if (node === this._hoveredNode)   node.mesh.material.color.setHex(NODE_HOVER)
-    else if (this._gatewayMap.has(node))   node.mesh.material.color.setHex(NODE_GATEWAY)
-    else                                   node.mesh.material.color.setHex(NODE_COLOR)
+    let hex
+    if (node === this._grabbedNode)        hex = NODE_GRABBED
+    else if (node === this._anchorNode)    hex = NODE_ANCHOR
+    else if (this._chamberNodes.has(node)) hex = NODE_CHAMBER
+    else if (isBoundary)                   hex = CHAMBER_COLOR
+    else if (node === this._hoveredNode)   hex = NODE_HOVER
+    else if (this._gatewayMap.has(node))   hex = NODE_GATEWAY
+    else                                   hex = NODE_COLOR
+    node.mesh.material.color.setHex(hex)
+    if (node.ghostMesh) node.ghostMesh.material.color.setHex(hex)
   }
 
   updateNodePosition(node, newPos) {
     node.position.copy(newPos)
     node.mesh.position.copy(newPos)
+    if (node.ghostMesh) node.ghostMesh.position.copy(newPos)
 
     for (const edge of this._edges) {
       if (edge.a !== node && edge.b !== node) continue
       edge.line.geometry.setFromPoints([edge.a.position, edge.b.position])
+      if (edge.ghostLine) edge.ghostLine.geometry.setFromPoints([edge.a.position, edge.b.position])
       if (edge.sprite) {
         edge.sprite.position.copy(
           new THREE.Vector3().addVectors(edge.a.position, edge.b.position).multiplyScalar(0.5)
@@ -267,12 +342,18 @@ export class SpatialSystem {
     if (this._edges.some(e => (e.a === nodeA && e.b === nodeB) || (e.a === nodeB && e.b === nodeA))) return null
 
     const geo  = new THREE.BufferGeometry().setFromPoints([nodeA.position, nodeB.position])
-    const mat  = new THREE.LineBasicMaterial({ color: NODE_COLOR, depthTest: false })
+    const mat  = new THREE.LineBasicMaterial({ color: NODE_COLOR, depthTest: true })
     const line = new THREE.Line(geo, mat)
     line.renderOrder = 999
     this._group.add(line)
 
-    const edge = { id: uid(), a: nodeA, b: nodeB, label, line, sprite: null }
+    const ghostGeo  = new THREE.BufferGeometry().setFromPoints([nodeA.position, nodeB.position])
+    const ghostMat  = new THREE.LineBasicMaterial({ color: NODE_COLOR, transparent: true, opacity: GHOST_OPACITY, depthTest: false })
+    const ghostLine = new THREE.Line(ghostGeo, ghostMat)
+    ghostLine.renderOrder = 997
+    this._group.add(ghostLine)
+
+    const edge = { id: uid(), a: nodeA, b: nodeB, label, line, ghostLine, sprite: null }
     line.userData.spatialEdge = edge
     this._edges.push(edge)
 
@@ -297,13 +378,22 @@ export class SpatialSystem {
     const geo  = this._buildChamberGeo(nodes.map(n => n.position))
     const mat  = new THREE.MeshBasicMaterial({
       color: CHAMBER_COLOR, transparent: true, opacity: CHAMBER_OPACITY,
-      side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+      side: THREE.DoubleSide, depthTest: true, depthWrite: false,
     })
     const mesh = new THREE.Mesh(geo, mat)
     mesh.renderOrder = 998
     this._group.add(mesh)
 
-    const chamber = { id: uid(), nodes: [...nodes], label, mesh, sprite: null }
+    const ghostGeo = this._buildChamberGeo(nodes.map(n => n.position))
+    const ghostMat = new THREE.MeshBasicMaterial({
+      color: CHAMBER_COLOR, transparent: true, opacity: CHAMBER_GHOST_OPACITY,
+      side: THREE.DoubleSide, depthTest: false, depthWrite: false,
+    })
+    const ghostMesh = new THREE.Mesh(ghostGeo, ghostMat)
+    ghostMesh.renderOrder = 996
+    this._group.add(ghostMesh)
+
+    const chamber = { id: uid(), nodes: [...nodes], label, mesh, ghostMesh, sprite: null }
     mesh.userData.spatialChamber = chamber
     this._chambers.push(chamber)
 
@@ -322,7 +412,6 @@ export class SpatialSystem {
     if (label) this._attachChamberSprite(chamber)
   }
 
-  // Live preview mesh for a new chamber being drawn (not yet committed)
   updatePreviewChamber(nodes) {
     if (!this._previewChamberMesh) {
       const mat = new THREE.MeshBasicMaterial({
@@ -349,6 +438,10 @@ export class SpatialSystem {
     chamber.nodes = [...nodes]
     chamber.mesh.geometry.dispose()
     chamber.mesh.geometry = this._buildChamberGeo(nodes.map(n => n.position))
+    if (chamber.ghostMesh) {
+      chamber.ghostMesh.geometry.dispose()
+      chamber.ghostMesh.geometry = this._buildChamberGeo(nodes.map(n => n.position))
+    }
     if (chamber.sprite) {
       const c = new THREE.Vector3()
       for (const n of nodes) c.add(n.position)
@@ -362,8 +455,6 @@ export class SpatialSystem {
   updateHover(camera) {
     this._raycaster.setFromCamera(this._center, camera)
 
-    // Priority: node > edge > face
-    // Include label sprites alongside meshes so aiming at a label counts as hovering the element
     const nodeTargets = this._nodes.flatMap(n => n.sprite ? [n.mesh, n.sprite] : [n.mesh])
     const nodeHits    = this._raycaster.intersectObjects(nodeTargets, false)
     const newNode     = nodeHits.length > 0 ? (nodeHits[0].object.userData.spatialNode ?? null) : null
@@ -390,9 +481,15 @@ export class SpatialSystem {
     }
 
     if (newEdge !== this._hoveredEdge) {
-      if (this._hoveredEdge) this._hoveredEdge.line.material.color.setHex(NODE_COLOR)
+      if (this._hoveredEdge) {
+        this._hoveredEdge.line.material.color.setHex(NODE_COLOR)
+        if (this._hoveredEdge.ghostLine) this._hoveredEdge.ghostLine.material.color.setHex(NODE_COLOR)
+      }
       this._hoveredEdge = newEdge
-      if (newEdge) newEdge.line.material.color.setHex(NODE_HOVER)
+      if (newEdge) {
+        newEdge.line.material.color.setHex(NODE_HOVER)
+        if (newEdge.ghostLine) newEdge.ghostLine.material.color.setHex(NODE_HOVER)
+      }
     }
 
     if (newChamber !== this._hoveredChamber) {
@@ -416,9 +513,9 @@ export class SpatialSystem {
   setLosMode(enabled) {
     this._losMode = enabled
     if (!enabled) {
-      for (const n of this._nodes)    { n.mesh.visible = true; if (n.sprite) n.sprite.visible = true }
-      for (const e of this._edges)    { e.line.visible = true; if (e.sprite) e.sprite.visible = true }
-      for (const c of this._chambers) { c.mesh.visible = true; if (c.sprite) c.sprite.visible = true }
+      for (const n of this._nodes)    { n.mesh.visible = true; if (n.ghostMesh) n.ghostMesh.visible = true; if (n.sprite) n.sprite.visible = true }
+      for (const e of this._edges)    { e.line.visible = true; if (e.ghostLine) e.ghostLine.visible = true; if (e.sprite) e.sprite.visible = true }
+      for (const c of this._chambers) { c.mesh.visible = true; if (c.ghostMesh) c.ghostMesh.visible = true; if (c.sprite) c.sprite.visible = true }
     }
   }
 
@@ -427,16 +524,19 @@ export class SpatialSystem {
     for (const node of this._nodes) {
       const vis = this._hasLos(origin, node.position, wallMeshes)
       node.mesh.visible = vis
+      if (node.ghostMesh) node.ghostMesh.visible = vis
       if (node.sprite) node.sprite.visible = vis
     }
     for (const edge of this._edges) {
       const vis = edge.a.mesh.visible || edge.b.mesh.visible
       edge.line.visible = vis
+      if (edge.ghostLine) edge.ghostLine.visible = vis
       if (edge.sprite) edge.sprite.visible = vis
     }
     for (const chamber of this._chambers) {
       const vis = chamber.nodes.some(n => n.mesh.visible)
       chamber.mesh.visible = vis
+      if (chamber.ghostMesh) chamber.ghostMesh.visible = vis
       if (chamber.sprite) chamber.sprite.visible = vis
     }
   }
@@ -458,40 +558,20 @@ export class SpatialSystem {
       const res = await fetch('/data/spatial.json')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
-
-      const nodeMap = {}
-      for (const nd of (data.nodes ?? [])) {
-        const node = this.placeNode(new THREE.Vector3(nd.x, nd.y, nd.z), nd.label ?? '')
-        node.id = nd.id
-        nodeMap[nd.id] = node
-      }
-      for (const ed of (data.edges ?? [])) {
-        const a = nodeMap[ed.a], b = nodeMap[ed.b]
-        if (a && b) {
-          const edge = this.addEdge(a, b, ed.label ?? '')
-          if (edge) edge.id = ed.id
-        }
-      }
-      for (const ch of (data.chambers ?? data.faces ?? [])) {
-        const nodes = (ch.nodes ?? []).map(id => nodeMap[id]).filter(Boolean)
-        if (nodes.length >= 3) {
-          const chamber = this.addChamber(nodes, ch.label ?? '')
-          if (chamber) chamber.id = ch.id
-        }
-      }
-      this.computeGateways()
-      console.log(`[SpatialSystem] Loaded ${this._nodes.length} nodes, ${this._edges.length} edges, ${this._chambers.length} chambers`)
+      this._restoreSnapshot(data)
+      // Seed history with the loaded state so first undo can restore it
+      this._undoStack = [this._snapshot()]
+      this._redoStack = []
+      console.log(`[SpatialSystem] Loaded ${this._nodes.length} nodes, ${this._edges.length} edges, ${this._chambers.length} chambers  (next id: ${_nextId})`)
     } catch {
       console.log('[SpatialSystem] No spatial.json — starting fresh')
+      this._undoStack = [this._snapshot()]
+      this._redoStack = []
     }
   }
 
   async save() {
-    const data = {
-      nodes:    this._nodes.map(n => ({ id: n.id, x: n.position.x, y: n.position.y, z: n.position.z, label: n.label })),
-      edges:    this._edges.map(e => ({ id: e.id, a: e.a.id, b: e.b.id, label: e.label })),
-      chambers: this._chambers.map(c => ({ id: c.id, nodes: c.nodes.map(n => n.id), label: c.label })),
-    }
+    const data = this._snapshot()
     const res = await fetch('/dev/save-spatial', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data),
     })
@@ -501,12 +581,84 @@ export class SpatialSystem {
 
   // ─── Private ─────────────────────────────────────────────────────────────────
 
+  /** Dispose all Three.js objects and reset data arrays. Does NOT touch history. */
+  _disposeAll() {
+    this._hoveredNode    = null
+    this._hoveredEdge    = null
+    this._hoveredChamber = null
+    this._anchorNode     = null
+    this._grabbedNode    = null
+    this._chamberNodes   = new Set()
+    this._gatewayMap     = new Map()
+
+    for (const n of this._nodes) {
+      this._group.remove(n.mesh)
+      n.mesh.geometry.dispose()
+      n.mesh.material.dispose()
+      if (n.ghostMesh) { this._group.remove(n.ghostMesh); n.ghostMesh.geometry.dispose(); n.ghostMesh.material.dispose() }
+      if (n.sprite) { this._group.remove(n.sprite); n.sprite.material.map?.dispose(); n.sprite.material.dispose() }
+    }
+    for (const e of this._edges) {
+      this._group.remove(e.line)
+      e.line.geometry.dispose()
+      e.line.material.dispose()
+      if (e.ghostLine) { this._group.remove(e.ghostLine); e.ghostLine.geometry.dispose(); e.ghostLine.material.dispose() }
+      if (e.sprite) { this._group.remove(e.sprite); e.sprite.material.map?.dispose(); e.sprite.material.dispose() }
+    }
+    for (const c of this._chambers) {
+      this._group.remove(c.mesh)
+      c.mesh.geometry.dispose()
+      c.mesh.material.dispose()
+      if (c.ghostMesh) { this._group.remove(c.ghostMesh); c.ghostMesh.geometry.dispose(); c.ghostMesh.material.dispose() }
+      if (c.sprite) { this._group.remove(c.sprite); c.sprite.material.map?.dispose(); c.sprite.material.dispose() }
+    }
+    this._nodes    = []
+    this._edges    = []
+    this._chambers = []
+    if (this._previewChamberMesh) this.clearPreviewChamber()
+  }
+
+  /** Rebuild scene from a plain-object snapshot (used by load, undo, redo). */
+  _restoreSnapshot(data) {
+    this._disposeAll()
+
+    const nodeMap = {}
+    for (const nd of (data.nodes ?? [])) {
+      const node = this.placeNode(new THREE.Vector3(nd.x, nd.y, nd.z), nd.label ?? '')
+      node.id = nd.id
+      nodeMap[nd.id] = node
+    }
+    for (const ed of (data.edges ?? [])) {
+      const a = nodeMap[ed.a], b = nodeMap[ed.b]
+      if (a && b) {
+        const edge = this.addEdge(a, b, ed.label ?? '')
+        if (edge) edge.id = ed.id
+      }
+    }
+    for (const ch of (data.chambers ?? data.faces ?? [])) {
+      const nodes = (ch.nodes ?? []).map(id => nodeMap[id]).filter(Boolean)
+      if (nodes.length >= 3) {
+        const chamber = this.addChamber(nodes, ch.label ?? '')
+        if (chamber) chamber.id = ch.id
+      }
+    }
+    this.computeGateways()
+
+    // Fix the ID counter so new nodes/edges/chambers never collide with stored IDs
+    _seedNextId(data.nodes ?? [], data.edges ?? [], data.chambers ?? [])
+  }
+
   _removeEdgeObj(edge) {
     if (this._hoveredEdge === edge) this._hoveredEdge = null
     this._disposeSprite(edge)
     this._group.remove(edge.line)
     edge.line.geometry.dispose()
     edge.line.material.dispose()
+    if (edge.ghostLine) {
+      this._group.remove(edge.ghostLine)
+      edge.ghostLine.geometry.dispose()
+      edge.ghostLine.material.dispose()
+    }
     this._edges = this._edges.filter(e => e !== edge)
   }
 
@@ -516,12 +668,16 @@ export class SpatialSystem {
     this._group.remove(chamber.mesh)
     chamber.mesh.geometry.dispose()
     chamber.mesh.material.dispose()
+    if (chamber.ghostMesh) {
+      this._group.remove(chamber.ghostMesh)
+      chamber.ghostMesh.geometry.dispose()
+      chamber.ghostMesh.material.dispose()
+    }
     this._chambers = this._chambers.filter(c => c !== chamber)
     this.computeGateways()
   }
 
   _buildChamberGeo(positions) {
-    // Ear-clip triangulation projected onto XZ — handles concave rooms correctly
     const pts2d   = positions.map(p => new THREE.Vector2(p.x, p.z))
     const indices = THREE.ShapeUtils.triangulateShape(pts2d, [])
     const verts   = []

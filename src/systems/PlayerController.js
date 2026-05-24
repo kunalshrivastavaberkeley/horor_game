@@ -1,22 +1,22 @@
 // src/systems/PlayerController.js
-// Player entity — position, collision, niko hold, auto-crouch.
+// Player entity — position, collision, lantern hold, auto-crouch.
 // No input, no camera management. WalkMode drives this each frame.
 
 import * as THREE from 'three'
 import { PlayerCollision } from './PlayerCollision.js'
-import { NIKO } from '../nikoConfig.js'
+import { LANTERN } from '../lanternConfig.js'
 
 const MOVE_SPEED           = 5.0
 const MIN_MOVE_SPEED       = 1.5
 const FLOOR_SEEK           = 3.0
 const ARTIFACT_PICKUP_DIST = 2.5
 export const DEATH_Y       = -1
-const SPAWN_POS            = new THREE.Vector3(-53.0, 5, -28.9)
+const SPAWN_POS            = new THREE.Vector3(39.48, 7.0, -6.42)
 
 const BODY_RADIUS        = 0.4
-const BODY_HEIGHT        = 1.8
+const BODY_HEIGHT        = 2.2
 const CROUCH_MIN         = 0.75
-const CROUCH_SPEED       = 5.0
+const CROUCH_SPEED       = 3.0
 const CROUCH_SPEED_BOOST = 4.0
 
 const FALL_RISE           = 12.0  // intensity units/s while ungrounded
@@ -27,15 +27,15 @@ const CHECKPOINT_BUFFER_SIZE = 4     // rolling history depth — each death ste
 const BAIL_DURATION       = 0.45  // real seconds of slow-mo on death
 const BAIL_TIMESCALE      = 0.12  // time scale factor during bail
 
-const NIKO_FLOAT_MAX      = 0.6     // max upward niko offset while airborne
-const NIKO_FWD_MAX        = 0.2   // max forward (away from camera) offset while airborne
-const NIKO_SPRING_K       = 2     // spring stiffness for landing oscillation
-const NIKO_SPRING_DAMPING = 2     // damping coefficient
-const NIKO_IMPACT_KICK    = 10.0  // downward velocity on landing
+const LANTERN_FLOAT_MAX      = 0.6     // max upward lantern offset while airborne
+const LANTERN_FWD_MAX        = 0.2    // max forward offset while airborne
+const LANTERN_SPRING_K       = 2      // spring stiffness for landing oscillation
+const LANTERN_SPRING_DAMPING = 2      // damping coefficient
+const LANTERN_IMPACT_KICK    = 10.0   // downward velocity on landing
 
 const _Y_UP = new THREE.Vector3(0, 1, 0)
 
-// ─── Niko carry oscillation ───────────────────────────────────────────────────
+// ─── Lantern carry oscillation ────────────────────────────────────────────────
 // Phase advances with walking speed; three axes at different offsets create
 // a rolling oval path (figure-8 in 3D) that reads as weight in the hand.
 const BOB_SPEED_SCALE = 2.5    // rad·s⁻¹ per (m/s) of horizontal speed
@@ -58,21 +58,18 @@ export class PlayerController {
 
     this.playerPosition  = SPAWN_POS.clone()
     this.movementState   = 'idle'   // 'idle' | 'walking'
-    this.nikoState       = 'held'   // 'held' | 'hugging'
+    this.lanternState    = 'held'   // 'held' | 'hugging'
 
-    // Live-tweakable copy of nikoConfig.js values.
-    // Edit nikoConfig.js to change the defaults, or use window.__niko in the
-    // browser console to tune at runtime while the path visualizer (P) is on.
-    this.nikoConst = {
-      fwdHeld:   NIKO.heldFwd,
-      rightHeld: NIKO.heldRight,
-      upHeld:    NIKO.heldUp,
-      fwdHug:    NIKO.hugFwd,
-      rightHug:  NIKO.hugRight,
-      upHug:     NIKO.hugUp,
-      lerpSpeed: NIKO.lerpSpeed,
-      ctrlRight: NIKO.arcRight,
-      ctrlDown:  NIKO.arcDown,
+    this.lanternConst = {
+      fwdHeld:   LANTERN.heldFwd,
+      rightHeld: LANTERN.heldRight,
+      upHeld:    LANTERN.heldUp,
+      fwdHug:    LANTERN.hugFwd,
+      rightHug:  LANTERN.hugRight,
+      upHug:     LANTERN.hugUp,
+      lerpSpeed: LANTERN.lerpSpeed,
+      ctrlRight: LANTERN.arcRight,
+      ctrlDown:  LANTERN.arcDown,
     }
 
     this._facing             = 0
@@ -83,72 +80,85 @@ export class PlayerController {
     this._fallIntensity      = 0
     this._isGrounded         = true
     this._prevGrounded       = true
-    this._nikoVertOffset     = 0
-    this._nikoVertVel        = 0
-    this._nikoFwdOffset      = 0
-    this._nikoFwdVel         = 0
+    this._lanternVertOffset  = 0
+    this._lanternVertVel     = 0
+    this._lanternFwdOffset   = 0
+    this._lanternFwdVel      = 0
     this._checkpointHistory  = [SPAWN_POS.clone()]  // oldest first; spawn is permanent floor
     this._checkpointTimer    = 0
     this._bailTimer          = 0
 
-    this._bobPhase    = 0
-    this._smoothSpeed = 0              // amplitude envelope — ramps up/down to kill snap on start/stop
-    this._nikoOscOffset = new THREE.Vector3()  // lerped oscillation offset — smooths any discontinuity
-    this._prevFacing  = null           // null = not yet initialized; set on first update
-    this._yawVel      = 0              // smoothed yaw velocity for look-lag
-    this._moveDir     = null           // normalized horizontal movement direction
+    this._bobPhase       = 0
+    this._smoothSpeed    = 0              // amplitude envelope — ramps up/down to kill snap on start/stop
+    this._lanternOscOffset = new THREE.Vector3()  // lerped oscillation offset
+    this._prevFacing     = null           // null = not yet initialized; set on first update
+    this._yawVel         = 0              // smoothed yaw velocity for look-lag
+    this._moveDir        = null           // normalized horizontal movement direction
     this._artifactPickedUp   = false
     this._showBodies         = false
-    this._nikoLerpT          = 0
+    this._lanternLerpT       = 0
 
     this._camera        = null
     this._collision     = null
-    this._nikoMesh      = null
-    this._thumbSprite   = null
-    this._fingersSprite = null
-    this._playerBody    = null
-    this._cameraHelper = null
-    this._pathVis      = null
+    this._lanternMesh   = null
+    this._playerMesh    = null
+    this._cameraHelper  = null
+    this._pathVis       = null
+
+    this._lanternEnabled = true
 
     // Callbacks — assigned by main.js
-    this.onArtifactPickedUp = null
-    this.onNikoStateChange  = null
-    this.onPause            = null
+    this.onArtifactPickedUp   = null
+    this.onLanternStateChange = null
+    this.onPause              = null
   }
 
   // ─── Camera / mesh setup ─────────────────────────────────────────────────────
 
+  initCollision() {
+    if (!this._collision) {
+      this._collision = new PlayerCollision(this._sm.getCatacombMesh())
+    }
+  }
+
   setCamera(cam) {
     this._camera = cam
     this._camera.position.copy(this.playerPosition)
-    this._collision = new PlayerCollision(this._sm.getCatacombMesh())
-    if (this._nikoMesh)      this._nikoMesh.visible      = true
-    if (this._thumbSprite)   this._thumbSprite.visible   = true
-    if (this._fingersSprite) this._fingersSprite.visible = true
-    this._initPlayerBody()
+    this.initCollision()
+    if (this._lanternMesh) this._lanternMesh.visible = this._lanternEnabled
+    this._initPlayerMesh()
   }
 
   releaseCamera() {
     this._camera = null
-    if (this._nikoMesh)      this._nikoMesh.visible      = false
-    if (this._thumbSprite)   this._thumbSprite.visible   = false
-    if (this._fingersSprite) this._fingersSprite.visible = false
+    // lanternMesh stays visible — detached modes show the body at its last position
   }
 
-  setNikoMesh(mesh) {
-    this._nikoMesh = mesh
-    this._nikoMesh.scale.setScalar(NIKO.scale)
-    this._nikoMesh.visible = false
+  setLanternVisible(v) {
+    this._lanternEnabled = v
+    if (this._lanternMesh) this._lanternMesh.visible = v
   }
 
-  setHandSprites(thumbSprite, fingersSprite) {
-    this._thumbSprite = thumbSprite
-    this._thumbSprite.scale.setScalar(NIKO.thumbScale)
-    this._thumbSprite.visible = false
+  // Attaches camera reference for lantern updates without the full setCamera side-effects.
+  // Used by fly mode so meshes follow the camera even though the physics body is detached.
+  setLanternCamera(cam) {
+    this._camera = cam
+  }
 
-    this._fingersSprite = fingersSprite
-    this._fingersSprite.scale.setScalar(NIKO.fingersScale)
-    this._fingersSprite.visible = false
+  setLanternMesh(mesh) {
+    this._lanternMesh = mesh
+    this._lanternMesh.scale.setScalar(LANTERN.scale)
+    this._lanternMesh.visible = false
+  }
+
+  setLanternSheen(v) {
+    if (!this._lanternMesh) return
+    this._lanternMesh.traverse(o => { if (o.isMesh) o.material.sheen = v })
+  }
+
+  setLanternSheenRoughness(v) {
+    if (!this._lanternMesh) return
+    this._lanternMesh.traverse(o => { if (o.isMesh) o.material.sheenRoughness = v })
   }
 
   get collision() { return this._collision }
@@ -170,10 +180,15 @@ export class PlayerController {
 
   setBodyVisible(val) { this._showBodies = val }
 
-  toggleNikoPathVis() {
+  toggleLanternPathVis() {
     if (this._pathVis) { this._destroyPathVis(); return false }
     this._initPathVis()
     return true
+  }
+
+  setLanternPathVis(v) {
+    if (v && !this._pathVis) this._initPathVis()
+    else if (!v && this._pathVis) this._destroyPathVis()
   }
 
   move(direction, delta) {
@@ -265,39 +280,38 @@ export class PlayerController {
         return
       }
     }
-    this.nikoState = this.nikoState === 'held' ? 'hugging' : 'held'
-    this.onNikoStateChange?.(this.nikoState)
+    this.lanternState = this.lanternState === 'held' ? 'hugging' : 'held'
+    this.onLanternStateChange?.(this.lanternState)
   }
 
   // ─── Per-frame visuals ────────────────────────────────────────────────────────
 
   update(delta) {
+    this._updatePlayerMesh()
     if (!this._camera) return
-    this._updateNiko(delta)
+    this._updateLantern(delta)
     this._updatePathVis()
-    this._updatePlayerBody()
   }
 
   // ─── Private ─────────────────────────────────────────────────────────────────
 
-  _updateNiko(delta) {
-    if (!this._nikoMesh || !this._camera || this._cameraFrozen) return
+  _updateLantern(delta) {
+    if (!this._lanternMesh || !this._camera || this._cameraFrozen) return
 
-    const c = this.nikoConst
-    const target = this.nikoState === 'hugging' ? 1 : 0
-    this._nikoLerpT += (target - this._nikoLerpT) * Math.min(1, c.lerpSpeed * delta)
+    const c = this.lanternConst
+    const target = this.lanternState === 'hugging' ? 1 : 0
+    this._lanternLerpT += (target - this._lanternLerpT) * Math.min(1, c.lerpSpeed * delta)
 
     const yaw   = this._facing
     const fwd   = new THREE.Vector3(-Math.sin(yaw), 0, -Math.cos(yaw))
     const right = new THREE.Vector3( Math.cos(yaw), 0, -Math.sin(yaw))
 
-    const basePos = this._nikoPathPoint(this._nikoLerpT, fwd, right)
+    const basePos = this._lanternPathPoint(this._lanternLerpT, fwd, right)
 
     // ─── 3-axis carry oscillation ─────────────────────────────────────────────
     const speed = this._horizontalSpeed
 
     // Smooth the amplitude envelope: ramp up fast, fade out a bit slower.
-    // Phase still uses raw speed so bob frequency stays in sync with footsteps.
     const ramp = speed > this._smoothSpeed ? 9.0 : 5.0
     this._smoothSpeed += (speed - this._smoothSpeed) * Math.min(1, ramp * delta)
     const normSpeed = this._smoothSpeed / MOVE_SPEED  // 0–1, no sudden jumps
@@ -305,20 +319,18 @@ export class PlayerController {
     // Phase advances with actual walking speed → bob frequency tracks cadence
     this._bobPhase += speed * BOB_SPEED_SCALE * delta
 
-    // Decompose movement direction into camera-relative fwd / strafe components
-    let fwdDot = 0, rightDot = 0
+    // Decompose movement direction into camera-relative fwd component
+    let fwdDot = 0
     if (this._moveDir) {
-      fwdDot   = this._moveDir.dot(fwd)
-      rightDot = this._moveDir.dot(right)
+      fwdDot = this._moveDir.dot(fwd)
     }
 
     // Moving forward/back → full vertical bob + forward pump.
-    // Pure strafe → vertical reduced, pump silent (arm doesn't pump sideways).
+    // Pure strafe → vertical reduced, pump silent.
     const fwdWeight = Math.abs(fwdDot)  // 0 (pure strafe) … 1 (pure fwd/back)
 
     // Hugging = scared: tighter grip reduces swing; breathing goes anxious.
-    // _nikoLerpT smoothly blends 0 (held/calm) → 1 (hugging/scared).
-    const scaredT   = this._nikoLerpT
+    const scaredT   = this._lanternLerpT
     const gripScale = 1.0 - 0.35 * scaredT  // tense grip damps the oscillation
 
     const ph = this._bobPhase
@@ -340,82 +352,51 @@ export class PlayerController {
     const lagRight = -this._yawVel * LOOK_LAG_SCALE
 
     // Combine target offset, then lerp the persistent offset toward it.
-    // Lerping the offset (not the world position) means Niko tracks the camera
-    // immediately but any oscillation discontinuity eases out over ~5 frames.
     const targetOsc = right.clone().multiplyScalar(oscRight + lagRight)
       .addScaledVector(_Y_UP, oscUp + breathe)
       .addScaledVector(fwd,   oscFwdV)
 
-    this._nikoOscOffset.lerp(targetOsc, Math.min(1, 14 * delta))
-    // fall float + landing spring applied to Niko's world position
+    this._lanternOscOffset.lerp(targetOsc, Math.min(1, 14 * delta))
+
+    // Fall float + landing spring applied to lantern's world position
     const fi            = this._fallIntensity
     const landed        = this._isGrounded && !this._prevGrounded
     this._prevGrounded  = this._isGrounded
 
-    const targetVert = this._isGrounded ? 0 : fi * NIKO_FLOAT_MAX
-    const targetFwd  = this._isGrounded ? 0 : fi * NIKO_FWD_MAX
-    this._nikoVertOffset += (targetVert - this._nikoVertOffset) * Math.min(1, 12 * delta)
-    this._nikoFwdOffset  += (targetFwd  - this._nikoFwdOffset)  * Math.min(1, 12 * delta)
+    const targetVert = this._isGrounded ? 0 : fi * LANTERN_FLOAT_MAX
+    const targetFwd  = this._isGrounded ? 0 : fi * LANTERN_FWD_MAX
+    this._lanternVertOffset += (targetVert - this._lanternVertOffset) * Math.min(1, 12 * delta)
+    this._lanternFwdOffset  += (targetFwd  - this._lanternFwdOffset)  * Math.min(1, 12 * delta)
 
     if (landed) {
-      this._nikoVertVel = -NIKO_IMPACT_KICK * fi
-      this._nikoFwdVel  = -NIKO_IMPACT_KICK * fi * 0.4
+      this._lanternVertVel = -LANTERN_IMPACT_KICK * fi
+      this._lanternFwdVel  = -LANTERN_IMPACT_KICK * fi * 0.4
     }
     if (this._isGrounded) {
-      this._nikoVertVel    += (-this._nikoVertOffset * NIKO_SPRING_K - this._nikoVertVel * NIKO_SPRING_DAMPING) * delta
-      this._nikoVertOffset += this._nikoVertVel * delta
-      this._nikoFwdVel     += (-this._nikoFwdOffset  * NIKO_SPRING_K - this._nikoFwdVel  * NIKO_SPRING_DAMPING) * delta
-      this._nikoFwdOffset  += this._nikoFwdVel * delta
+      this._lanternVertVel    += (-this._lanternVertOffset * LANTERN_SPRING_K - this._lanternVertVel * LANTERN_SPRING_DAMPING) * delta
+      this._lanternVertOffset += this._lanternVertVel * delta
+      this._lanternFwdVel     += (-this._lanternFwdOffset  * LANTERN_SPRING_K - this._lanternFwdVel  * LANTERN_SPRING_DAMPING) * delta
+      this._lanternFwdOffset  += this._lanternFwdVel * delta
     }
 
-    this._nikoMesh.position.copy(basePos).add(this._nikoOscOffset)
-    this._nikoMesh.position.y += this._nikoVertOffset
-    this._nikoMesh.position.addScaledVector(fwd, this._nikoFwdOffset)
+    this._lanternMesh.position.copy(basePos).add(this._lanternOscOffset)
+    this._lanternMesh.position.y += this._lanternVertOffset
+    this._lanternMesh.position.addScaledVector(fwd, this._lanternFwdOffset)
 
-    // ─── Orientation (unchanged) ──────────────────────────────────────────────
+    // ─── Orientation ──────────────────────────────────────────────────────────
     // held = faces away from player, hugging = faces player
-    // derive quatToward by rotating quatAway 180° around +Y (left turn)
-    const lookAwayPt = this._nikoMesh.position.clone().add(fwd)
-    this._nikoMesh.lookAt(lookAwayPt)
-    const quatAway   = this._nikoMesh.quaternion.clone()
+    const lookAwayPt = this._lanternMesh.position.clone().add(fwd)
+    this._lanternMesh.lookAt(lookAwayPt)
+    const quatAway   = this._lanternMesh.quaternion.clone()
 
     const rotLeftY   = new THREE.Quaternion().setFromAxisAngle(_Y_UP, Math.PI)
     const quatToward = new THREE.Quaternion().multiplyQuaternions(rotLeftY, quatAway)
 
-    this._nikoMesh.quaternion.slerpQuaternions(quatAway, quatToward, this._nikoLerpT)
-
-    // ─── Hand billboard positions (shared anchor, different render layers) ────
-    if (this._thumbSprite || this._fingersSprite) {
-      // Start from basePos + same oscillation offset Niko uses, then apply the
-      // hand's own screen-space offsets. This means every bob/breathe/look-lag
-      // that moves Niko moves the hand identically.
-      const handPos = basePos.clone()
-        .add(this._nikoOscOffset)
-        .addScaledVector(right, NIKO.handRight)
-        .addScaledVector(_Y_UP, NIKO.handUp)
-        .addScaledVector(fwd,   NIKO.handFwd)
-
-      const handVisible = this._nikoLerpT < 0.5
-      if (this._fingersSprite) {
-        this._fingersSprite.visible = handVisible
-        this._fingersSprite.position.copy(handPos)
-        this._fingersSprite.position.y += this._nikoVertOffset
-        this._fingersSprite.position.addScaledVector(fwd, this._nikoFwdOffset)
-        this._fingersSprite.scale.setScalar(NIKO.fingersScale)
-        this._fingersSprite.quaternion.copy(this._camera.quaternion)
-      }
-      if (this._thumbSprite) {
-        this._thumbSprite.visible = handVisible
-        this._thumbSprite.position.copy(handPos)
-        this._thumbSprite.position.y += this._nikoVertOffset
-        this._thumbSprite.position.addScaledVector(fwd, this._nikoFwdOffset)
-        this._thumbSprite.scale.setScalar(NIKO.thumbScale)
-      }
-    }
+    this._lanternMesh.quaternion.slerpQuaternions(quatAway, quatToward, this._lanternLerpT)
   }
 
-  _nikoPathPoint(t, fwd, right) {
-    const c   = this.nikoConst
+  _lanternPathPoint(t, fwd, right) {
+    const c   = this.lanternConst
     const cam = this._camera.position
 
     const p0 = cam.clone()
@@ -473,19 +454,9 @@ export class PlayerController {
     liveDot.renderOrder = 1001
     scene.add(liveDot)
 
-    const hud = document.createElement('div')
-    Object.assign(hud.style, {
-      position: 'fixed', top: '12px', right: '12px',
-      background: 'rgba(0,0,0,0.78)', color: '#eee',
-      padding: '10px 14px', fontFamily: 'monospace', fontSize: '12px',
-      lineHeight: '1.65', borderRadius: '5px', border: '1px solid #555',
-      zIndex: '600', pointerEvents: 'none', whiteSpace: 'pre',
-    })
-    document.body.appendChild(hud)
-
-    this._pathVis = { dots, line, liveDot, hud }
-    window.__niko = this.nikoConst
-    console.log('[NikoPathVis] on — tweak via window.__niko')
+    this._pathVis = { dots, line, liveDot }
+    window.__lantern = this.lanternConst
+    console.log('[LanternPathVis] on — tweak via window.__lantern')
   }
 
   _updatePathVis() {
@@ -497,35 +468,12 @@ export class PlayerController {
     const positions = this._pathVis.line.geometry.attributes.position.array
 
     for (let i = 0; i < PATH_DOT_COUNT; i++) {
-      const pos = this._nikoPathPoint(i / (PATH_DOT_COUNT - 1), fwd, right)
+      const pos = this._lanternPathPoint(i / (PATH_DOT_COUNT - 1), fwd, right)
       this._pathVis.dots[i].position.copy(pos)
       positions[i * 3] = pos.x; positions[i * 3 + 1] = pos.y; positions[i * 3 + 2] = pos.z
     }
     this._pathVis.line.geometry.attributes.position.needsUpdate = true
-    this._pathVis.liveDot.position.copy(this._nikoPathPoint(this._nikoLerpT, fwd, right))
-
-    const c = this.nikoConst
-    const s = this.nikoState === 'hugging' ? '●hug' : '○held'
-    this._pathVis.hud.textContent = [
-      `── Niko Path  [P to hide] ──`,
-      ``,
-      `          HELD      HUG`,
-      `fwd    ${c.fwdHeld.toFixed(3).padStart(8)}  ${c.fwdHug.toFixed(3)}`,
-      `right  ${c.rightHeld.toFixed(3).padStart(8)}  ${c.rightHug.toFixed(3)}`,
-      `up     ${c.upHeld.toFixed(3).padStart(8)}  ${c.upHug.toFixed(3)}`,
-      ``,
-      `arc control (midpoint offset)`,
-      `ctrlRight  ${c.ctrlRight.toFixed(3)}`,
-      `ctrlDown   ${c.ctrlDown.toFixed(3)}`,
-      `lerpSpeed  ${c.lerpSpeed.toFixed(2)}`,
-      ``,
-      `t = ${this._nikoLerpT.toFixed(2)}  state = ${s}`,
-      ``,
-      `● green = held  ● red = hug`,
-      `● cyan  = current`,
-      ``,
-      `console: window.__niko.ctrlRight = 0.3`,
-    ].join('\n')
+    this._pathVis.liveDot.position.copy(this._lanternPathPoint(this._lanternLerpT, fwd, right))
   }
 
   _destroyPathVis() {
@@ -534,23 +482,22 @@ export class PlayerController {
     for (const d of this._pathVis.dots) scene.remove(d)
     scene.remove(this._pathVis.line)
     scene.remove(this._pathVis.liveDot)
-    this._pathVis.hud.remove()
     this._pathVis = null
-    delete window.__niko
-    console.log('[NikoPathVis] off')
+    delete window.__lantern
+    console.log('[LanternPathVis] off')
   }
 
   // ─── Player body debug ───────────────────────────────────────────────────────
 
-  _updatePlayerBody() {
-    if (!this._playerBody) return
+  _updatePlayerMesh() {
+    if (!this._playerMesh) return
     const show  = this._showBodies
     const h     = this._currentBodyHeight
     const feetY = this.playerPosition.y - h
     const ys    = [feetY + BODY_RADIUS, feetY + h * 0.5, feetY + h - BODY_RADIUS]
     for (let i = 0; i < 3; i++) {
-      this._playerBody[i].visible = show
-      if (show) this._playerBody[i].position.set(this.playerPosition.x, ys[i], this.playerPosition.z)
+      this._playerMesh[i].visible = show
+      if (show) this._playerMesh[i].position.set(this.playerPosition.x, ys[i], this.playerPosition.z)
     }
     if (this._cameraHelper) {
       this._cameraHelper.visible = show
@@ -558,18 +505,18 @@ export class PlayerController {
     }
   }
 
-  _initPlayerBody() {
-    if (this._playerBody) return
+  _initPlayerMesh() {
+    if (this._playerMesh) return
     const geo = new THREE.SphereGeometry(BODY_RADIUS, 12, 8)
     const mat = new THREE.MeshStandardMaterial({
       color: 0x44aaff, transparent: true, opacity: 0.5, depthWrite: false
     })
-    this._playerBody = [
+    this._playerMesh = [
       new THREE.Mesh(geo, mat),
       new THREE.Mesh(geo, mat),
       new THREE.Mesh(geo, mat),
     ]
-    for (const s of this._playerBody) {
+    for (const s of this._playerMesh) {
       s.visible = false
       this._gsm.scene.add(s)
     }

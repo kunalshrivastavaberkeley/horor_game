@@ -21,29 +21,28 @@ export class SceneManagement {
   }
 
   /**
-   * Production loader — real catacomb GLTF at world origin.
-   * onSceneReady fires once the GLB finishes loading.
-   * @param {string} catacombPath  URL served from public/models/
+   * @param {string} path  1M mesh — collision (BVH) + rendering
    */
-  loadCatacomb(catacombPath) {
+  loadCatacomb(path) {
     const loader = new GLTFLoader()
+
     loader.load(
-      catacombPath,
+      path,
       (gltf) => {
         this._catacombMesh = gltf.scene
         this._catacombMesh.position.copy(CATACOMB_POSITION)
-        this._scene.add(this._catacombMesh)
         this._catacombMesh.traverse(child => {
-          if (child.isMesh) child.geometry.computeBoundsTree()
+          if (!child.isMesh) return
+          child.geometry.computeBoundsTree()
+          child.castShadow    = false
+          child.receiveShadow = false
         })
+        this._scene.add(this._catacombMesh)
         this._ready = true
         this._onSceneReady()
       },
       undefined,
-      (err) => {
-        console.error('[SceneManagement] Catacomb load failed:', err)
-        this._onSceneError('catacomb', err)
-      }
+      (err) => this._onSceneError('catacomb', err)
     )
   }
 
@@ -62,22 +61,30 @@ export class SceneManagement {
     this._onSceneReady()
   }
 
+  setVisualMeshVisible(v) {
+    if (this._catacombMesh) this._catacombMesh.visible = v
+  }
+
   setCatacombStoneAppearance(emissiveColor = 0x000000, emissiveIntensity = 0) {
     this._assertReady('setCatacombStoneAppearance')
     this._catacombMesh.traverse(child => {
       if (!child.isMesh) return
+      console.log('[AO check]', child.name, 'has color attr:', !!child.geometry.attributes.color)
       const mats = Array.isArray(child.material) ? child.material : [child.material]
       for (let i = 0; i < mats.length; i++) {
         const old = mats[i]
-        const stone = new THREE.MeshStandardMaterial({
+        // TEMP: physical material for quick visualization — swap back to MeshStandardMaterial when done
+        const stone = new THREE.MeshPhysicalMaterial({
           map:              old.map              ?? null,
           normalMap:        old.normalMap        ?? null,
           aoMap:            old.aoMap            ?? null,
           roughnessMap:     old.roughnessMap     ?? null,
           metalnessMap:     old.metalnessMap     ?? null,
           color:            old.color            ?? new THREE.Color(0x8a7060),
-          roughness:        0.92,
+          roughness:        1.0,
           metalness:        0.0,
+          flatShading:      false,
+          vertexColors:     true,
           side:             old.side             ?? THREE.FrontSide,
           transparent:      old.transparent      ?? false,
           opacity:          old.opacity          ?? 1.0,
@@ -96,7 +103,7 @@ export class SceneManagement {
   /**
    * Pass 2 — overlay each catacomb mesh with a SubtractiveBlending ghost.
    * The warm emissive color gets subtracted from the rendered frame wherever the
-   * stone sits, making walls drain warmth out of the scene. Niko's additive point
+   * stone sits, making walls drain warmth out of the scene. The additive point
    * light still wins in open space — the effect reads as the stone "eating" light.
    * @param {number|THREE.Color} color      warm color to subtract, e.g. 0xff5500
    * @param {number}             intensity  strength of the drain
@@ -124,7 +131,6 @@ export class SceneManagement {
     for (const child of meshes) {
       const overlay = new THREE.Mesh(child.geometry, overlayMat)
       overlay.renderOrder = 1
-      // Bake world transform so overlays sit exactly on top of the stone
       child.updateWorldMatrix(true, false)
       overlay.applyMatrix4(child.matrixWorld)
       overlay.matrixAutoUpdate = false

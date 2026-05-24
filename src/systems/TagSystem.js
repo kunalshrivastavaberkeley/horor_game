@@ -32,6 +32,15 @@ export class TagSystem {
 
   get count()       { return this._tags.length }
   get visible()     { return this._tagGroup.visible }
+
+  /** IFocusable — returns all tags for CameraController examine mode. */
+  getFocusables() {
+    return this._tags.map((t, i) => ({
+      id:       `tag_${i}`,
+      label:    t.label,
+      position: t.group.position.clone(),
+    }))
+  }
   get hoveredTag()  { return this._hoveredTag }
 
   /** Drop a pin+label at world `position`. Returns the tag object. */
@@ -98,7 +107,7 @@ export class TagSystem {
     return this._tagGroup.visible
   }
 
-  // ─── External raycasting (for ZoneEditMode) ───────────────────────────────────
+  // ─── External raycasting ─────────────────────────────────────────────────────
 
   /** All pin meshes across all tags — pass to raycaster.intersectObjects. */
   getAllPinMeshes() {
@@ -162,7 +171,7 @@ export class TagSystem {
     const hit  = hits.length > 0 ? (spriteToTag.get(hits[0].object) ?? null) : null
 
     if (hit !== this._hoveredTag) {
-      if (this._hoveredTag) this._setTagColor(this._hoveredTag, PIN_COLOR)
+      if (this._hoveredTag) this._setTagColor(this._hoveredTag, 0xffffff)
       this._hoveredTag = hit
       if (hit) this._setTagColor(hit, PIN_HOVER)
       this._setCrosshairHover(!!hit)
